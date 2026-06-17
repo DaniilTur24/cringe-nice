@@ -18,8 +18,9 @@ export default function CreateTripScreen({ onCreate }) {
 
   return (
     <Card>
-      <h2 className="text-xl font-bold">Новая поездка</h2>
-      <p className="mt-1 text-sm text-gray-600">
+      <span className="panel-label">Nouvelle partie</span>
+      <h2 className="mt-4 text-2xl font-black leading-tight">Новая поездка</h2>
+      <p className="mt-2 text-sm font-bold text-ink/65">
         Создай поездку и пригласи друзей в свой Grand Суд.
       </p>
       <form onSubmit={handleSubmit} className="mt-4 space-y-3">
@@ -33,7 +34,7 @@ export default function CreateTripScreen({ onCreate }) {
           value={adminName}
           onChange={(e) => setAdminName(e.target.value)}
         />
-        <Button type="submit" variant="primary" className="w-full" disabled={submitting}>
+        <Button type="submit" variant="gold" className="w-full" disabled={submitting}>
           {submitting ? 'Создаём...' : 'Создать'}
         </Button>
       </form>

@@ -2,14 +2,16 @@ import { useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { supabase } from './lib/supabaseClient'
 import Courtroom from './Courtroom'
+import BrandHeader from './components/BrandHeader'
 import Card from './components/Card'
+import GameShell from './components/GameShell'
 import Toast from './components/Toast'
 import CreateTripScreen from './components/onboarding/CreateTripScreen'
 import InviteLinkScreen from './components/onboarding/InviteLinkScreen'
 import JoinScreen from './components/onboarding/JoinScreen'
 import ManifestScreen from './components/onboarding/ManifestScreen'
 
-const ADMIN_AVATAR = '👑'
+const ADMIN_AVATAR = 'ADM'
 
 // signInAnonymously() creates a brand new auth.users row every time it's
 // called — reusing an existing session (e.g. an admin opening their own
@@ -164,9 +166,9 @@ export default function Onboarding() {
     : ''
 
   return (
-    <div className="min-h-screen bg-cream px-4 py-10">
-      <div className="mx-auto max-w-md space-y-6">
-        <h1 className="text-center text-3xl font-extrabold tracking-tight">Le Grand Суд</h1>
+    <GameShell>
+      <div className="flex flex-1 flex-col justify-center gap-6">
+        <BrandHeader />
 
         <Toast toast={toast} onDismiss={() => setToast(null)} />
 
@@ -174,7 +176,8 @@ export default function Onboarding() {
           {step === 'loading' && (
             <motion.div key="loading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
               <Card className="text-center">
-                <p className="font-bold">Загрузка...</p>
+                <span className="panel-label">Connexion</span>
+                <p className="mt-4 font-black">Поднимаем сцену...</p>
               </Card>
             </motion.div>
           )}
@@ -210,6 +213,6 @@ export default function Onboarding() {
           )}
         </AnimatePresence>
       </div>
-    </div>
+    </GameShell>
   )
 }

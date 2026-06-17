@@ -20,8 +20,9 @@ export default function JoinScreen({ onJoin }) {
 
   return (
     <Card>
-      <h2 className="text-xl font-bold">Тебя пригласили в Le Grand Суд</h2>
-      <p className="mt-1 text-sm text-gray-600">
+      <span className="panel-label">Guest pass</span>
+      <h2 className="mt-4 text-2xl font-black leading-tight">Тебя пригласили в Le Grand Суд</h2>
+      <p className="mt-2 text-sm font-bold text-ink/65">
         Выбери имя и аватар, чтобы вступить в игру.
       </p>
       <form onSubmit={handleSubmit} className="mt-4 space-y-4">
@@ -31,7 +32,7 @@ export default function JoinScreen({ onJoin }) {
           onChange={(e) => setUsername(e.target.value)}
         />
         <AvatarPicker value={avatar} onChange={setAvatar} />
-        <Button type="submit" variant="primary" className="w-full" disabled={submitting}>
+        <Button type="submit" variant="gold" className="w-full" disabled={submitting}>
           {submitting ? 'Вступаем...' : 'Вступить в игру'}
         </Button>
       </form>
