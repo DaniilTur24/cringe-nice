@@ -2,12 +2,14 @@ import { useEffect, useRef, useState } from 'react'
 import { AnimatePresence } from 'framer-motion'
 import { supabase } from './lib/supabaseClient'
 import { useTripMembers } from './hooks/useTripMembers'
+import BrandHeader from './components/BrandHeader'
 import Card from './components/Card'
 import VoteCard from './components/VoteCard'
 import Toast from './components/Toast'
 import VerdictPopup from './components/VerdictPopup'
 import Leaderboard from './components/Leaderboard'
 import CreateProposalButton from './components/CreateProposalButton'
+import GameShell from './components/GameShell'
 
 async function loadProposalDetails(proposalId) {
   const { data, error } = await supabase
@@ -199,9 +201,9 @@ export default function Courtroom({ tripId, userId }) {
   }
 
   return (
-    <div className="min-h-screen bg-cream px-4 py-10">
-      <div className="mx-auto max-w-md space-y-6">
-        <h1 className="text-center text-3xl font-extrabold tracking-tight">Le Grand Суд</h1>
+    <GameShell>
+      <div className="flex flex-1 flex-col gap-6 pb-24">
+        <BrandHeader kicker="Live from the trip" />
 
         <Toast toast={displayedToast} onDismiss={dismissToast} />
 
@@ -213,27 +215,32 @@ export default function Courtroom({ tripId, userId }) {
 
         {loading && (
           <Card className="text-center">
-            <p className="font-bold">Загрузка зала суда...</p>
+            <span className="panel-label">Loading</span>
+            <p className="mt-4 font-black">Зажигаем табло суда...</p>
           </Card>
         )}
 
         {!loading && !activeProposal && (
           <Card className="text-center">
-            <p className="font-bold">Сейчас никто не под судом.</p>
-            <p className="mt-2 text-sm text-gray-600">Ожидаем новых исков...</p>
+            <span className="panel-label">Quiet round</span>
+            <p className="mt-4 text-xl font-black">Сейчас никто не под судом.</p>
+            <p className="mt-2 text-sm font-bold text-ink/65">Ожидаем новый иск или награду.</p>
           </Card>
         )}
 
         {!loading && activeProposal && isSpectator && (
           <Card className="text-center">
-            <p className="font-bold">Идёт разбирательство по твоему делу.</p>
-            <p className="mt-2 text-sm text-gray-600">Голосуют без тебя — жди вердикта.</p>
+            <span className="panel-label">On stage</span>
+            <p className="mt-4 text-xl font-black">Идет разбирательство по твоему делу.</p>
+            <p className="mt-2 text-sm font-bold text-ink/65">Голосуют без тебя, жди вердикта.</p>
           </Card>
         )}
 
         {!loading && activeProposal && !isSpectator && hasVoted && (
           <Card className="text-center">
-            <p className="font-bold">Ты уже проголосовал. Ждём остальных...</p>
+            <span className="panel-label">Vote locked</span>
+            <p className="mt-4 text-xl font-black">Ты уже проголосовал.</p>
+            <p className="mt-2 text-sm font-bold text-ink/65">Ждем остальных игроков.</p>
           </Card>
         )}
 
@@ -245,6 +252,6 @@ export default function Courtroom({ tripId, userId }) {
       </div>
 
       <CreateProposalButton tripId={tripId} userId={userId} members={members} />
-    </div>
+    </GameShell>
   )
 }

@@ -5,7 +5,7 @@ import Button from './Button'
 export default function VerdictPopup({ verdict, onClose }) {
   return (
     <motion.div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-ink/75 px-4 backdrop-blur-sm"
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
@@ -20,8 +20,9 @@ export default function VerdictPopup({ verdict, onClose }) {
         onClick={(e) => e.stopPropagation()}
       >
         <Card className="text-center">
-          <p className="text-lg font-extrabold">{verdict.message}</p>
-          <Button variant="primary" className="mt-4 w-full" onClick={onClose}>
+          <span className="panel-label">Verdict</span>
+          <p className="mt-4 text-xl font-black leading-tight">{verdict.message}</p>
+          <Button variant="gold" className="mt-5 w-full" onClick={onClose}>
             Понятно
           </Button>
         </Card>
