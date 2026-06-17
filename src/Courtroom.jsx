@@ -47,7 +47,23 @@ export default function Courtroom({ tripId, userId }) {
   const [hasVoted, setHasVoted] = useState(false)
   const [resultPopup, setResultPopup] = useState(null)
   const [toast, setToast] = useState(null)
-  const { members } = useTripMembers(tripId)
+  const [dismissedMembersError, setDismissedMembersError] = useState(null)
+  const { members, error: membersError } = useTripMembers(tripId)
+
+  // membersError comes from a hook value, not a user action, so it's folded
+  // into the toast at render time instead of synced via setState-in-effect.
+  const displayedToast =
+    toast ?? (membersError && membersError !== dismissedMembersError
+      ? { type: 'error', message: membersError.message }
+      : null)
+
+  function dismissToast() {
+    if (toast) {
+      setToast(null)
+      return
+    }
+    if (membersError) setDismissedMembersError(membersError)
+  }
 
   const activeProposalRef = useRef(null)
   useEffect(() => {
@@ -187,7 +203,7 @@ export default function Courtroom({ tripId, userId }) {
       <div className="mx-auto max-w-md space-y-6">
         <h1 className="text-center text-3xl font-extrabold tracking-tight">Le Grand Суд</h1>
 
-        <Toast toast={toast} onDismiss={() => setToast(null)} />
+        <Toast toast={displayedToast} onDismiss={dismissToast} />
 
         <AnimatePresence>
           {resultPopup && (

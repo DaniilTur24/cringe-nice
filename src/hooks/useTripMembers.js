@@ -8,22 +8,26 @@ function sortByPoints(list) {
 export function useTripMembers(tripId) {
   const [members, setMembers] = useState([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
 
   useEffect(() => {
     let cancelled = false
 
     async function load() {
       setLoading(true)
-      const { data, error } = await supabase
+      const { data, error: fetchError } = await supabase
         .from('trip_members')
         .select('profiles(id, username, avatar_url, total_points)')
         .eq('trip_id', tripId)
 
-      if (!cancelled && !error) {
+      if (cancelled) return
+      if (fetchError) {
+        setError(fetchError)
+      } else {
         const list = (data ?? []).map((row) => row.profiles).filter(Boolean)
         setMembers(sortByPoints(list))
       }
-      if (!cancelled) setLoading(false)
+      setLoading(false)
     }
 
     load()
@@ -60,11 +64,15 @@ export function useTripMembers(tripId) {
           filter: `trip_id=eq.${tripId}`,
         },
         async (payload) => {
-          const { data } = await supabase
+          const { data, error: profileError } = await supabase
             .from('profiles')
             .select('id, username, avatar_url, total_points')
             .eq('id', payload.new.user_id)
             .maybeSingle()
+          if (profileError) {
+            setError(profileError)
+            return
+          }
           if (!data) return
           setMembers((prev) => {
             if (prev.some((m) => m.id === data.id)) return prev
@@ -79,5 +87,5 @@ export function useTripMembers(tripId) {
     }
   }, [tripId])
 
-  return { members, loading }
+  return { members, loading, error }
 }
