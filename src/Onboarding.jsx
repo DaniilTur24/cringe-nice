@@ -4,23 +4,14 @@ import { supabase } from './lib/supabaseClient'
 import Courtroom from './Courtroom'
 import Card from './components/Card'
 import Toast from './components/Toast'
+import EmailScreen from './components/onboarding/EmailScreen'
+import OtpScreen from './components/onboarding/OtpScreen'
 import CreateTripScreen from './components/onboarding/CreateTripScreen'
 import InviteLinkScreen from './components/onboarding/InviteLinkScreen'
 import JoinScreen from './components/onboarding/JoinScreen'
 import ManifestScreen from './components/onboarding/ManifestScreen'
 
 const ADMIN_AVATAR = '👑'
-
-// signInAnonymously() creates a brand new auth.users row every time it's
-// called — reusing an existing session (e.g. an admin opening their own
-// invite link, or a member joining a second trip) avoids orphaning users.
-async function ensureAnonymousSession() {
-  const { data: { session } } = await supabase.auth.getSession()
-  if (session?.user) return session.user
-  const { data, error } = await supabase.auth.signInAnonymously()
-  if (error) throw error
-  return data.user
-}
 
 async function findUserTripId(userId) {
   const { data, error } = await supabase
@@ -52,11 +43,36 @@ const screenMotion = {
 }
 
 export default function Onboarding() {
-  // 'loading' | 'create-trip' | 'invite-link' | 'join' | 'manifest' | 'ready'
+  // 'loading' | 'email' | 'otp' | 'create-trip' | 'invite-link' | 'join' | 'manifest' | 'ready'
   const [step, setStep] = useState('loading')
   const [tripId, setTripId] = useState(null)
   const [userId, setUserId] = useState(null)
+  const [email, setEmail] = useState('')
   const [toast, setToast] = useState(null)
+
+  // Resume an existing trip if the now-authenticated user already belongs
+  // to one, otherwise route to create or join depending on whether the
+  // invite link carried a trip_id.
+  async function routeAuthenticatedUser(user, tripIdFromUrl) {
+    const candidateTripId = tripIdFromUrl ?? (await findUserTripId(user.id))
+    if (candidateTripId && (await isTripMember(candidateTripId, user.id))) {
+      if (!tripIdFromUrl) {
+        window.history.replaceState(null, '', `?trip_id=${candidateTripId}`)
+      }
+      setTripId(candidateTripId)
+      setUserId(user.id)
+      setStep('ready')
+      return
+    }
+
+    setUserId(user.id)
+    if (tripIdFromUrl) {
+      setTripId(tripIdFromUrl)
+      setStep('join')
+    } else {
+      setStep('create-trip')
+    }
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -64,33 +80,21 @@ export default function Onboarding() {
     async function init() {
       try {
         const tripIdFromUrl = new URLSearchParams(window.location.search).get('trip_id')
-        const { data: { session } } = await supabase.auth.getSession()
-
-        if (session?.user) {
-          const candidateTripId = tripIdFromUrl ?? (await findUserTripId(session.user.id))
-          if (candidateTripId && (await isTripMember(candidateTripId, session.user.id))) {
-            if (cancelled) return
-            if (!tripIdFromUrl) {
-              window.history.replaceState(null, '', `?trip_id=${candidateTripId}`)
-            }
-            setTripId(candidateTripId)
-            setUserId(session.user.id)
-            setStep('ready')
-            return
-          }
-        }
-
+        // getUser() round-trips to the server, unlike getSession() which only
+        // reads the cached token — that matters if auth.users was ever reset
+        // (e.g. a schema reload) while a stale session sat in localStorage.
+        const { data: { user } } = await supabase.auth.getUser()
         if (cancelled) return
-        if (tripIdFromUrl) {
-          setTripId(tripIdFromUrl)
-          setStep('join')
+
+        if (user) {
+          await routeAuthenticatedUser(user, tripIdFromUrl)
         } else {
-          setStep('create-trip')
+          setStep('email')
         }
       } catch (err) {
         if (!cancelled) {
           setToast({ type: 'error', message: err.message })
-          setStep('create-trip')
+          setStep('email')
         }
       }
     }
@@ -101,13 +105,45 @@ export default function Onboarding() {
     }
   }, [])
 
+  async function handleEmailSubmit(submittedEmail) {
+    try {
+      const { error } = await supabase.auth.signInWithOtp({ email: submittedEmail })
+      if (error) throw error
+      setEmail(submittedEmail)
+      setStep('otp')
+    } catch (err) {
+      setToast({ type: 'error', message: err.message })
+    }
+  }
+
+  async function handleOtpSubmit(code) {
+    try {
+      const { data, error } = await supabase.auth.verifyOtp({ email, token: code, type: 'email' })
+      if (error) throw error
+      const tripIdFromUrl = new URLSearchParams(window.location.search).get('trip_id')
+      await routeAuthenticatedUser(data.user, tripIdFromUrl)
+    } catch (err) {
+      setToast({ type: 'error', message: err.message })
+    }
+  }
+
+  async function handleResendOtp() {
+    try {
+      const { error } = await supabase.auth.signInWithOtp({ email })
+      if (error) throw error
+      setToast({ type: 'info', message: 'Код отправлен повторно.' })
+    } catch (err) {
+      setToast({ type: 'error', message: err.message })
+    }
+  }
+
   async function handleCreateTrip(tripName, adminName) {
     try {
-      const user = await ensureAnonymousSession()
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) throw new Error('Сессия истекла, войди заново.')
 
-      // upsert, not insert: ensureAnonymousSession() can return a session
-      // left over from an earlier attempt (e.g. trip insert failed after
-      // the profile already succeeded) — a plain insert would 409 on retry.
+      // upsert, not insert: a retry after a failed trip/member insert would
+      // otherwise 409 on a profile that already exists from the first try.
       const { error: profileError } = await supabase
         .from('profiles')
         .upsert([{ id: user.id, username: adminName, avatar_url: ADMIN_AVATAR }])
@@ -136,7 +172,8 @@ export default function Onboarding() {
 
   async function handleJoin(username, avatar) {
     try {
-      const user = await ensureAnonymousSession()
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) throw new Error('Сессия истекла, войди заново.')
 
       const { error: profileError } = await supabase
         .from('profiles')
@@ -176,6 +213,23 @@ export default function Onboarding() {
               <Card className="text-center">
                 <p className="font-bold">Загрузка...</p>
               </Card>
+            </motion.div>
+          )}
+
+          {step === 'email' && (
+            <motion.div key="email" {...screenMotion}>
+              <EmailScreen onSubmit={handleEmailSubmit} />
+            </motion.div>
+          )}
+
+          {step === 'otp' && (
+            <motion.div key="otp" {...screenMotion}>
+              <OtpScreen
+                email={email}
+                onSubmit={handleOtpSubmit}
+                onResend={handleResendOtp}
+                onBack={() => setStep('email')}
+              />
             </motion.div>
           )}
 
