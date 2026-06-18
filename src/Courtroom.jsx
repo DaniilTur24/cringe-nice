@@ -43,7 +43,7 @@ function buildVerdictMessage(proposal, status, finalScore) {
     : `Награда отклонена.`
 }
 
-export default function Courtroom({ tripId, userId }) {
+export default function Courtroom({ tripId, userId, tripStatus = 'active', onExit }) {
   const [loading, setLoading] = useState(true)
   const [activeProposal, setActiveProposal] = useState(null)
   const [hasVoted, setHasVoted] = useState(false)
@@ -203,6 +203,16 @@ export default function Courtroom({ tripId, userId }) {
   return (
     <GameShell>
       <div className="flex flex-1 flex-col gap-6 pb-24">
+        {onExit && (
+          <button
+            type="button"
+            onClick={onExit}
+            className="self-start text-sm font-bold text-ink/70 underline"
+          >
+            ← К поездкам
+          </button>
+        )}
+
         <BrandHeader kicker="Live from the trip" />
 
         <Toast toast={displayedToast} onDismiss={dismissToast} />
@@ -212,6 +222,13 @@ export default function Courtroom({ tripId, userId }) {
             <VerdictPopup verdict={resultPopup} onClose={() => setResultPopup(null)} />
           )}
         </AnimatePresence>
+
+        {tripStatus !== 'active' && (
+          <Card className="text-center">
+            <span className="panel-label">{tripStatus === 'finished' ? 'Завершена' : 'Отменена'}</span>
+            <p className="mt-4 font-black">Поездка закрыта — только просмотр.</p>
+          </Card>
+        )}
 
         {loading && (
           <Card className="text-center">
@@ -251,7 +268,9 @@ export default function Courtroom({ tripId, userId }) {
         <Leaderboard members={members} />
       </div>
 
-      <CreateProposalButton tripId={tripId} userId={userId} members={members} />
+      {tripStatus === 'active' && (
+        <CreateProposalButton tripId={tripId} userId={userId} members={members} />
+      )}
     </GameShell>
   )
 }

@@ -31,7 +31,6 @@ create table public.profiles (
   id            uuid primary key references auth.users (id) on delete cascade,
   username      text not null,
   avatar_url    text,
-  total_points  integer not null default 0,
   -- quoted: current_role is a reserved keyword (built-in CURRENT_ROLE function)
   "current_role" text
 );
@@ -43,15 +42,19 @@ create table public.trips (
   id        uuid primary key default gen_random_uuid(),
   name      text not null,
   admin_id  uuid not null references public.profiles (id) on delete restrict,
-  settings  jsonb not null default '{}'::jsonb
+  settings  jsonb not null default '{}'::jsonb,
+  -- 'active' until the creator explicitly Finishes or Cancels it.
+  status    text not null default 'active' check (status in ('active', 'finished', 'cancelled'))
 );
 
 -- Без этой таблицы невозможно определить "всех участников поездки" для
 -- закрытия голосования — добавлена как необходимая инфраструктура.
 create table public.trip_members (
-  trip_id   uuid not null references public.trips (id) on delete cascade,
-  user_id   uuid not null references public.profiles (id) on delete cascade,
-  joined_at timestamptz not null default now(),
+  trip_id       uuid not null references public.trips (id) on delete cascade,
+  user_id       uuid not null references public.profiles (id) on delete cascade,
+  joined_at     timestamptz not null default now(),
+  -- per-trip score: a user in several trips has an independent total in each.
+  total_points  integer not null default 0,
   primary key (trip_id, user_id)
 );
 
@@ -96,7 +99,10 @@ create index votes_proposal_id_idx on public.votes (proposal_id);
 
 -- ----------------------------------------------------------------------------
 -- 1. При создании жалобы ('fine') у creator_id сразу списывается 1 балл
---    (залог, который либо вернётся при approved, либо сгорит при rejected).
+--    в рамках этой поездки (залог, который либо вернётся при approved,
+--    либо сгорит при rejected). trip_members не имеет UPDATE-политики RLS
+--    вовсе, так что обычный пользователь не может подделать total_points
+--    напрямую — это может сделать только security definer функция.
 -- ----------------------------------------------------------------------------
 create function public.handle_new_proposal()
 returns trigger
@@ -106,9 +112,9 @@ set search_path = public
 as $$
 begin
   if new.type = 'fine' then
-    update public.profiles
+    update public.trip_members
     set total_points = total_points - 1
-    where id = new.creator_id;
+    where trip_id = new.trip_id and user_id = new.creator_id;
   end if;
   return new;
 end;
@@ -226,15 +232,15 @@ begin
     from public.votes
     where proposal_id = new.proposal_id and score <> 0;
 
-    update public.profiles
+    update public.trip_members
     set total_points = total_points + round(v_avg_score)
-    where id = v_proposal.target_id;
+    where trip_id = v_proposal.trip_id and user_id = v_proposal.target_id;
 
     if v_proposal.type = 'fine' then
       -- возврат залога creator_id
-      update public.profiles
+      update public.trip_members
       set total_points = total_points + 1
-      where id = v_proposal.creator_id;
+      where trip_id = v_proposal.trip_id and user_id = v_proposal.creator_id;
     end if;
 
     update public.proposals
@@ -252,11 +258,10 @@ create trigger after_vote_insert
   execute function public.close_proposal_if_complete();
 
 -- ----------------------------------------------------------------------------
--- 4. Защита total_points/current_role от прямого изменения пользователем
---    через UPDATE profiles (RLS разрешает обновлять свой профиль, но не эти
---    поля — иначе любой игрок мог бы выставить себе любой счёт).
---    Внутренние функции выше помечают изменение как доверенное через
---    transaction-local флаг app.internal_update.
+-- 4. Защита current_role от прямого изменения пользователем через UPDATE
+--    profiles (RLS разрешает обновлять свой профиль, но не эту колонку).
+--    total_points больше не живёт на profiles (см. trip_members выше), так
+--    что этому триггеру достаточно следить только за current_role.
 -- ----------------------------------------------------------------------------
 create function public.lock_protected_profile_fields()
 returns trigger
@@ -267,9 +272,8 @@ begin
     return new;
   end if;
 
-  if new.total_points is distinct from old.total_points
-     or new.current_role is distinct from old.current_role then
-    raise exception 'total_points и current_role изменяются только системой';
+  if new.current_role is distinct from old.current_role then
+    raise exception 'current_role изменяется только системой';
   end if;
 
   return new;
@@ -281,92 +285,30 @@ create trigger before_profile_update
   for each row
   execute function public.lock_protected_profile_fields();
 
--- handle_new_proposal/close_proposal_if_complete должны выставлять флаг перед
--- своими UPDATE profiles, чтобы пройти guard-триггер выше.
-create or replace function public.handle_new_proposal()
+-- ----------------------------------------------------------------------------
+-- 5. Завершение/отмена поездки создателем (status: active -> finished или
+--    cancelled) автоматически отклоняет всё, что всё ещё голосуется в ней —
+--    иначе такое предложение осталось бы pending навечно.
+-- ----------------------------------------------------------------------------
+create function public.reject_pending_proposals_on_trip_close()
 returns trigger
 language plpgsql
 security definer
 set search_path = public
 as $$
 begin
-  if new.type = 'fine' then
-    perform set_config('app.internal_update', 'true', true);
-    update public.profiles
-    set total_points = total_points - 1
-    where id = new.creator_id;
-  end if;
+  update public.proposals
+  set status = 'rejected'
+  where trip_id = new.id and status = 'pending';
   return new;
 end;
 $$;
 
-create or replace function public.close_proposal_if_complete()
-returns trigger
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-  v_proposal       record;
-  v_expected_votes integer;
-  v_total_votes    integer;
-  v_zero_votes     integer;
-  v_avg_score      numeric;
-begin
-  select trip_id, creator_id, target_id, type, status
-  into v_proposal
-  from public.proposals
-  where id = new.proposal_id
-  for update;
-
-  if v_proposal.status <> 'pending' then
-    return new;
-  end if;
-
-  select count(*) into v_expected_votes
-  from public.trip_members
-  where trip_id = v_proposal.trip_id
-    and user_id not in (v_proposal.creator_id, v_proposal.target_id);
-
-  select count(*) into v_total_votes
-  from public.votes
-  where proposal_id = new.proposal_id;
-
-  if v_total_votes < v_expected_votes then
-    return new;
-  end if;
-
-  select count(*) into v_zero_votes
-  from public.votes
-  where proposal_id = new.proposal_id and score = 0;
-
-  perform set_config('app.internal_update', 'true', true);
-
-  if v_zero_votes * 2 >= v_total_votes then
-    update public.proposals set status = 'rejected' where id = new.proposal_id;
-  else
-    select avg(score) into v_avg_score
-    from public.votes
-    where proposal_id = new.proposal_id and score <> 0;
-
-    update public.profiles
-    set total_points = total_points + round(v_avg_score)
-    where id = v_proposal.target_id;
-
-    if v_proposal.type = 'fine' then
-      update public.profiles
-      set total_points = total_points + 1
-      where id = v_proposal.creator_id;
-    end if;
-
-    update public.proposals
-    set status = 'approved', final_score = round(v_avg_score)
-    where id = new.proposal_id;
-  end if;
-
-  return new;
-end;
-$$;
+create trigger on_trip_status_change
+  after update on public.trips
+  for each row
+  when (old.status = 'active' and new.status <> 'active')
+  execute function public.reject_pending_proposals_on_trip_close();
 
 -- ============================================================================
 -- ROW LEVEL SECURITY

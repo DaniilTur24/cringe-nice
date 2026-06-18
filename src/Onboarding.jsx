@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { supabase } from './lib/supabaseClient'
 import Courtroom from './Courtroom'
+import Dashboard from './Dashboard'
 import BrandHeader from './components/BrandHeader'
 import Card from './components/Card'
 import GameShell from './components/GameShell'
@@ -14,17 +15,6 @@ import JoinScreen from './components/onboarding/JoinScreen'
 import ManifestScreen from './components/onboarding/ManifestScreen'
 
 const ADMIN_AVATAR = 'ADM'
-
-async function findUserTripId(userId) {
-  const { data, error } = await supabase
-    .from('trip_members')
-    .select('trip_id')
-    .eq('user_id', userId)
-    .limit(1)
-    .maybeSingle()
-  if (error) throw error
-  return data?.trip_id ?? null
-}
 
 async function isTripMember(tripId, userId) {
   const { data, error } = await supabase
@@ -45,35 +35,46 @@ const screenMotion = {
 }
 
 export default function Onboarding() {
-  // 'loading' | 'email' | 'otp' | 'create-trip' | 'invite-link' | 'join' | 'manifest' | 'ready'
+  // 'loading' | 'email' | 'otp' | 'dashboard' | 'create-trip' | 'invite-link' | 'join' | 'manifest' | 'ready'
   const [step, setStep] = useState('loading')
   const [tripId, setTripId] = useState(null)
+  const [tripStatus, setTripStatus] = useState('active')
   const [userId, setUserId] = useState(null)
   const [email, setEmail] = useState('')
   const [toast, setToast] = useState(null)
 
-  // Resume an existing trip if the now-authenticated user already belongs
-  // to one, otherwise route to create or join depending on whether the
-  // invite link carried a trip_id.
+  // Enters a specific trip's Courtroom, picking up its current status so a
+  // finished/cancelled trip renders read-only instead of assuming 'active'.
+  async function enterTrip(id) {
+    try {
+      const { data, error } = await supabase.from('trips').select('status').eq('id', id).single()
+      if (error) throw error
+      setTripStatus(data.status)
+    } catch {
+      setTripStatus('active')
+    }
+    setTripId(id)
+    setStep('ready')
+  }
+
+  // A trip_id in the URL is a deliberate invite link — resolve it straight
+  // into that trip (or the join screen). With no trip_id, land on the
+  // dashboard instead of guessing "the" trip, since a user can belong to
+  // several at once.
   async function routeAuthenticatedUser(user, tripIdFromUrl) {
-    const candidateTripId = tripIdFromUrl ?? (await findUserTripId(user.id))
-    if (candidateTripId && (await isTripMember(candidateTripId, user.id))) {
-      if (!tripIdFromUrl) {
-        window.history.replaceState(null, '', `?trip_id=${candidateTripId}`)
+    setUserId(user.id)
+
+    if (tripIdFromUrl) {
+      if (await isTripMember(tripIdFromUrl, user.id)) {
+        await enterTrip(tripIdFromUrl)
+      } else {
+        setTripId(tripIdFromUrl)
+        setStep('join')
       }
-      setTripId(candidateTripId)
-      setUserId(user.id)
-      setStep('ready')
       return
     }
 
-    setUserId(user.id)
-    if (tripIdFromUrl) {
-      setTripId(tripIdFromUrl)
-      setStep('join')
-    } else {
-      setStep('create-trip')
-    }
+    setStep('dashboard')
   }
 
   useEffect(() => {
@@ -194,8 +195,25 @@ export default function Onboarding() {
     }
   }
 
+  if (step === 'dashboard') {
+    return (
+      <Dashboard
+        userId={userId}
+        onCreateTrip={() => setStep('create-trip')}
+        onOpenTrip={(id) => enterTrip(id)}
+      />
+    )
+  }
+
   if (step === 'ready') {
-    return <Courtroom tripId={tripId} userId={userId} />
+    return (
+      <Courtroom
+        tripId={tripId}
+        userId={userId}
+        tripStatus={tripStatus}
+        onExit={() => setStep('dashboard')}
+      />
+    )
   }
 
   const inviteUrl = tripId
@@ -238,13 +256,20 @@ export default function Onboarding() {
 
           {step === 'create-trip' && (
             <motion.div key="create-trip" {...screenMotion}>
+              <button
+                type="button"
+                onClick={() => setStep('dashboard')}
+                className="mb-3 text-sm font-bold text-ink/70 underline"
+              >
+                ← Назад
+              </button>
               <CreateTripScreen onCreate={handleCreateTrip} />
             </motion.div>
           )}
 
           {step === 'invite-link' && (
             <motion.div key="invite-link" {...screenMotion}>
-              <InviteLinkScreen inviteUrl={inviteUrl} onContinue={() => setStep('ready')} />
+              <InviteLinkScreen inviteUrl={inviteUrl} onContinue={() => enterTrip(tripId)} />
             </motion.div>
           )}
 
@@ -262,7 +287,7 @@ export default function Onboarding() {
               exit={{ opacity: 0, scale: 0.9 }}
               transition={{ duration: 0.3 }}
             >
-              <ManifestScreen onReady={() => setStep('ready')} />
+              <ManifestScreen onReady={() => enterTrip(tripId)} />
             </motion.div>
           )}
         </AnimatePresence>
