@@ -28,9 +28,21 @@ const DIALOG_CONTENT = {
     confirmLabel: 'Отменить',
     variant: 'danger',
   },
+  restore: {
+    title: 'Восстановить поездку?',
+    description: 'Поездка снова станет активной — можно будет создавать иски и награды.',
+    confirmLabel: 'Восстановить',
+    variant: 'primary',
+  },
+  delete: {
+    title: 'Удалить поездку навсегда?',
+    description: 'Это удалит поездку, всех участников и всю историю исков/наград без возможности восстановления.',
+    confirmLabel: 'Удалить',
+    variant: 'danger',
+  },
 }
 
-export default function TripCard({ trip, onOpen, onLeave, onFinish, onCancel }) {
+export default function TripCard({ trip, onOpen, onLeave, onFinish, onCancel, onRestore, onDelete }) {
   const [pendingAction, setPendingAction] = useState(null)
   const [submitting, setSubmitting] = useState(false)
 
@@ -41,6 +53,8 @@ export default function TripCard({ trip, onOpen, onLeave, onFinish, onCancel }) 
     if (pendingAction === 'leave') await onLeave?.(trip.id)
     if (pendingAction === 'finish') await onFinish?.(trip.id)
     if (pendingAction === 'cancel') await onCancel?.(trip.id)
+    if (pendingAction === 'restore') await onRestore?.(trip.id)
+    if (pendingAction === 'delete') await onDelete?.(trip.id)
     setSubmitting(false)
     setPendingAction(null)
   }
@@ -75,6 +89,17 @@ export default function TripCard({ trip, onOpen, onLeave, onFinish, onCancel }) 
           <Button variant="danger" className="flex-1" onClick={() => setPendingAction('leave')}>
             Выйти
           </Button>
+        )}
+
+        {!isActive && trip.isAdmin && (
+          <>
+            <Button variant="primary" className="flex-1" onClick={() => setPendingAction('restore')}>
+              Восстановить
+            </Button>
+            <Button variant="danger" className="flex-1" onClick={() => setPendingAction('delete')}>
+              Удалить
+            </Button>
+          </>
         )}
       </div>
 

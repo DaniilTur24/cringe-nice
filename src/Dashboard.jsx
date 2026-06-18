@@ -85,6 +85,15 @@ export default function Dashboard({ userId, onCreateTrip, onOpenTrip }) {
     await reload()
   }
 
+  async function handleDelete(tripId) {
+    const { error } = await supabase.from('trips').delete().eq('id', tripId)
+    if (error) {
+      setToast({ type: 'error', message: error.message })
+      return
+    }
+    await reload()
+  }
+
   const activeTrips = trips.filter((trip) => trip.status === 'active')
   const closedTrips = trips.filter((trip) => trip.status !== 'active')
 
@@ -130,7 +139,13 @@ export default function Dashboard({ userId, onCreateTrip, onOpenTrip }) {
             <div className="flex flex-col gap-4">
               <span className="panel-label self-start">Завершённые</span>
               {closedTrips.map((trip) => (
-                <TripCard key={trip.id} trip={trip} onOpen={onOpenTrip} />
+                <TripCard
+                  key={trip.id}
+                  trip={trip}
+                  onOpen={onOpenTrip}
+                  onRestore={(id) => handleSetStatus(id, 'active')}
+                  onDelete={handleDelete}
+                />
               ))}
             </div>
           )}
