@@ -204,9 +204,11 @@ create trigger on_proposal_created
 -- 2. Валидация голоса: запрещаем голосовать creator_id/target_id, голосовать
 --    повторно после закрытия, голосовать не из этой поездки, следим, чтобы
 --    score соответствовал типу предложения — диапазон ±10, кроме Судьи с
---    зарядом (±20, заряд списывается только если |score| реально > 10). Вес
---    голоса (weight=2) разрешён только Прокурору с дневным зарядом (3 раза в
---    день в текущей роли — роль и так сгорает каждые сутки).
+--    зарядом (±20). Списание заряда суперголоса перенесено в
+--    close_proposal_if_complete (секция 3) — если дело всё равно отклонили
+--    большинством, попытка не должна тратить заряд впустую. Вес голоса
+--    (weight=2) разрешён только Прокурору с дневным зарядом (3 раза в день в
+--    текущей роли — роль и так сгорает каждые сутки).
 -- ----------------------------------------------------------------------------
 create function public.validate_vote()
 returns trigger
@@ -271,15 +273,6 @@ begin
     where trip_id = v_proposal.trip_id and user_id = new.voter_id;
   end if;
 
-  if v_voter_role = 'judge' and abs(new.score) > 10 then
-    update public.trip_members
-    set role_metadata = jsonb_set(
-      role_metadata, '{super_verdict_remaining}',
-      to_jsonb(coalesce((v_voter_metadata ->> 'super_verdict_remaining')::integer, 0) - 1)
-    )
-    where trip_id = v_proposal.trip_id and user_id = new.voter_id;
-  end if;
-
   return new;
 end;
 $$;
@@ -296,7 +289,10 @@ create trigger before_vote_insert
 --    голосах от нескольких участников в одной транзакции/момент времени.
 --    Только один pending proposal на trip_id одновременно (см. индекс
 --    proposals_one_pending_per_trip), так что внутри этого триггера нет
---    межпроposal-гонки за total_points в рамках одной поездки.
+--    межпроposal-гонки за total_points в рамках одной поездки. Заряд
+--    суперголоса Судьи (|score| > 10, см. validate_vote) списывается только
+--    в ветке 'approved' — если дело всё равно отклонили большинством,
+--    попытка не должна тратить заряд впустую.
 -- ----------------------------------------------------------------------------
 create function public.close_proposal_if_complete()
 returns trigger
@@ -376,6 +372,18 @@ begin
       set total_points = total_points + v_cashback
       where trip_id = v_proposal.trip_id and user_id = v_proposal.creator_id;
     end if;
+
+    -- Заряд суперголоса Судьи сгорает только сейчас, при реальном одобрении.
+    update public.trip_members tm
+    set role_metadata = jsonb_set(
+      tm.role_metadata, '{super_verdict_remaining}',
+      to_jsonb(coalesce((tm.role_metadata ->> 'super_verdict_remaining')::integer, 0) - 1)
+    )
+    from public.votes v
+    where v.proposal_id = new.proposal_id
+      and abs(v.score) > 10
+      and tm.trip_id = v_proposal.trip_id
+      and tm.user_id = v.voter_id;
 
     update public.proposals
     set status = 'approved', final_score = v_final_score

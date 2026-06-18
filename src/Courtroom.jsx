@@ -35,20 +35,41 @@ async function loadProposalDetails(proposalId) {
   }
 }
 
-function buildVerdictMessage(proposal, status, finalScore) {
+function buildVerdictMessage(proposal, status, finalScore, judgeOverrideScore) {
+  const isGhostFine = proposal.type === 'fine' && proposal.creator_role === 'ghost'
+
   if (status === 'approved') {
     const points = finalScore ?? 0
-    return proposal.type === 'fine'
+    let message = proposal.type === 'fine'
       ? `Иск одобрен! ${proposal.targetName} получает ${points} баллов.`
       : `Награда одобрена! ${proposal.targetName} получает ${points} баллов.`
+    if (isGhostFine) {
+      message += ' Автор — Призрак, эта жалоба не попадёт в архив дел.'
+    }
+    if (judgeOverrideScore != null) {
+      message += ` Верховный Судья превысил полномочия и поставил оценку ${judgeOverrideScore}!`
+    }
+    return message
   }
-  if (proposal.type === 'fine' && proposal.creator_role === 'ghost') {
+  if (isGhostFine) {
     // Призрак ни штрафа не платит, ни раскрытия не получает — даже в попапе.
-    return `Иск отклонён. ${proposal.targetName} оправдан(а)!`
+    return `Иск отклонён. ${proposal.targetName} оправдан(а)! Автор — Призрак: имя не раскрывается, баллы не списываются.`
   }
   return proposal.type === 'fine'
     ? `Иск отклонён. ${proposal.targetName} оправдан(а)! У ябеды ${proposal.creatorName} забрали 1 балл.`
     : `Награда отклонена.`
+}
+
+async function loadJudgeOverrideScore(proposalId) {
+  const { data, error } = await supabase
+    .from('votes')
+    .select('score')
+    .eq('proposal_id', proposalId)
+    .or('score.gt.10,score.lt.-10')
+    .maybeSingle()
+
+  if (error) throw error
+  return data?.score ?? null
 }
 
 function proposalCardContent(proposal) {
@@ -192,10 +213,28 @@ export default function Courtroom({ tripId, userId, tripStatus = 'active', onExi
           if (payload.new.status === 'pending') return
           const current = proposalsRef.current.find((p) => p.id === payload.new.id)
           if (!current) return
-          setVerdictQueue((prev) => [
-            ...prev,
-            { message: buildVerdictMessage(current, payload.new.status, payload.new.final_score) },
-          ])
+
+          // Заряд Судьи бьёт по итоговому баллу только если дело одобрено —
+          // при отклонении его экстремальный голос ни на что не повлиял, и
+          // упоминать "превышение полномочий" в этом случае не за что.
+          const overridePromise =
+            payload.new.status === 'approved'
+              ? loadJudgeOverrideScore(payload.new.id).catch(() => null)
+              : Promise.resolve(null)
+
+          overridePromise.then((judgeOverrideScore) => {
+            setVerdictQueue((prev) => [
+              ...prev,
+              {
+                message: buildVerdictMessage(
+                  current,
+                  payload.new.status,
+                  payload.new.final_score,
+                  judgeOverrideScore
+                ),
+              },
+            ])
+          })
           setProposals((prev) => prev.filter((p) => p.id !== payload.new.id))
         }
       )
