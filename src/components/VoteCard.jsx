@@ -137,7 +137,7 @@ export default function VoteCard({ proposal, onSubmit, voterRole, voterRoleMetad
                       initial={{ scale: 1.4 }}
                       animate={{ scale: 1 }}
                       transition={{ type: 'spring', stiffness: 500, damping: 15 }}
-                      className={`rounded-[1.15rem] border-[3px] border-ink bg-white px-8 py-4 text-6xl font-black leading-none shadow-neo-sm ${config.textClass}`}
+                      className={`rounded-[1.15rem] border-[3px] border-ink bg-white px-8 py-4 text-6xl font-black leading-none shadow-neo-sm [font-variant-numeric:tabular-nums] ${config.textClass}`}
                     >
                       {score > 0 ? `+${score}` : score}
                     </motion.span>
