@@ -13,17 +13,18 @@ export default function InviteLinkScreen({ inviteUrl, onContinue }) {
 
   return (
     <Card className="text-center">
-      <h2 className="text-xl font-bold">Поездка создана!</h2>
-      <p className="mt-2 text-sm text-gray-600">
+      <span className="panel-label">Invite desk</span>
+      <h2 className="mt-4 text-2xl font-black leading-tight">Поездка создана!</h2>
+      <p className="mt-2 text-sm font-bold text-ink/65">
         Отправь эту ссылку друзьям, чтобы они присоединились:
       </p>
-      <div className="mt-4 break-all rounded-2xl border-2 border-black bg-cream p-3 text-sm font-bold">
+      <div className="mt-4 break-all rounded-[1rem] border-[3px] border-ink bg-white p-3 text-sm font-extrabold shadow-[inset_0_-4px_0_rgba(19,10,34,0.08)]">
         {inviteUrl}
       </div>
       <Button variant="secondary" className="mt-3 w-full" onClick={handleCopy}>
         {copied ? 'Скопировано!' : 'Скопировать ссылку'}
       </Button>
-      <Button variant="primary" className="mt-3 w-full" onClick={onContinue}>
+      <Button variant="gold" className="mt-3 w-full" onClick={onContinue}>
         Войти в зал суда
       </Button>
     </Card>

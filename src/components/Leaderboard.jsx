@@ -1,5 +1,6 @@
 import { motion } from 'framer-motion'
 import Card from './Card'
+import { avatarLabel } from '../lib/avatars'
 
 export default function Leaderboard({ members }) {
   if (members.length === 0) return null
@@ -10,8 +11,16 @@ export default function Leaderboard({ members }) {
 
   return (
     <Card>
-      <h2 className="text-xl font-bold">Таблица лидеров</h2>
-      <div className="mt-4 space-y-2">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <span className="panel-label">Scoreboard</span>
+          <h2 className="mt-3 text-2xl font-black leading-tight">Таблица лидеров</h2>
+        </div>
+        <span className="rounded-full border-2 border-ink bg-white px-3 py-1 text-sm font-black">
+          {sorted.length}
+        </span>
+      </div>
+      <div className="mt-4 space-y-3">
         {sorted.map((member, index) => {
           const isFirst = index === 0
           const isLast = sorted.length > 1 && index === sorted.length - 1
@@ -21,13 +30,20 @@ export default function Leaderboard({ members }) {
               key={member.id}
               layout
               transition={{ type: 'spring', stiffness: 300, damping: 25 }}
-              className="flex items-center gap-3 rounded-2xl border-2 border-black bg-white p-3"
+              className="grid grid-cols-[auto_1fr_auto] items-center gap-3 rounded-[1rem] border-[3px] border-ink bg-white p-3 shadow-[0_5px_0_#130A22]"
             >
-              <span className="text-2xl">{member.avatar_url ?? '🙂'}</span>
-              <span className="flex-1 truncate font-bold">{member.username}</span>
-              {isFirst && <span className="text-xl">👑</span>}
-              {isLast && <span className="text-xl">🔥</span>}
-              <span className="font-extrabold text-french-blue">{member.total_points}</span>
+              <span className="avatar-chip">{avatarLabel(member.avatar_url)}</span>
+              <span className="min-w-0">
+                <span className="block truncate font-black">{member.username}</span>
+                {(isFirst || isLast) && (
+                  <span className="mt-1 inline-flex rounded-full bg-ink px-2 py-0.5 text-[0.62rem] font-black uppercase tracking-wide text-cream">
+                    {isFirst ? 'Top seat' : 'Hot seat'}
+                  </span>
+                )}
+              </span>
+              <span className="rounded-[0.8rem] border-2 border-ink bg-gold px-3 py-2 font-black text-ink">
+                {member.total_points}
+              </span>
             </motion.div>
           )
         })}

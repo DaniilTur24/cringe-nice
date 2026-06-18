@@ -9,6 +9,7 @@ const TYPE_CONFIG = {
     agreeVariant: 'danger',
     color: '#FF3B3B',
     textClass: 'text-juicy-red',
+    label: 'Accusation',
     sign: -1,
   },
   reward: {
@@ -16,6 +17,7 @@ const TYPE_CONFIG = {
     agreeVariant: 'primary',
     color: '#0055FF',
     textClass: 'text-french-blue',
+    label: 'Applause',
     sign: 1,
   },
 }
@@ -79,8 +81,11 @@ export default function VoteCard({ proposal, onSubmit }) {
           transition={{ duration: 0.4, ease: 'easeIn' }}
         >
           <Card>
-            <h2 className="text-xl font-bold">{proposal.title}</h2>
-            <p className="mt-2 text-sm text-gray-600">{proposal.description}</p>
+            <span className="panel-label">{config.label}</span>
+            <h2 className="mt-4 text-2xl font-black leading-tight">{proposal.title}</h2>
+            <p className="mt-3 rounded-[1rem] border-2 border-ink bg-white/75 p-4 text-sm font-bold text-ink/70">
+              {proposal.description}
+            </p>
 
             <AnimatePresence mode="wait">
               {subStep === 'choice' ? (
@@ -89,11 +94,10 @@ export default function VoteCard({ proposal, onSubmit }) {
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
-                  className="mt-6 flex gap-4"
+                  className="mt-6 grid grid-cols-2 gap-3"
                 >
                   <Button
                     variant="secondary"
-                    className="flex-1"
                     disabled={submitting}
                     onClick={handleReject}
                   >
@@ -101,7 +105,6 @@ export default function VoteCard({ proposal, onSubmit }) {
                   </Button>
                   <Button
                     variant={config.agreeVariant}
-                    className="flex-1"
                     disabled={submitting}
                     onClick={() => setSubStep('slider')}
                   >
@@ -122,7 +125,7 @@ export default function VoteCard({ proposal, onSubmit }) {
                       initial={{ scale: 1.4 }}
                       animate={{ scale: 1 }}
                       transition={{ type: 'spring', stiffness: 500, damping: 15 }}
-                      className={`text-5xl font-extrabold ${config.textClass}`}
+                      className={`rounded-[1.15rem] border-[3px] border-ink bg-white px-8 py-4 text-6xl font-black leading-none shadow-neo-sm ${config.textClass}`}
                     >
                       {score > 0 ? `+${score}` : score}
                     </motion.span>
@@ -144,7 +147,7 @@ export default function VoteCard({ proposal, onSubmit }) {
                     disabled={submitting}
                     onClick={handleConfirm}
                   >
-                    {submitting ? 'Отправка...' : '👍 Подтвердить балл'}
+                    {submitting ? 'Отправка...' : 'Подтвердить балл'}
                   </Button>
                 </motion.div>
               )}
