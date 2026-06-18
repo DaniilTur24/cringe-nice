@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { supabase } from './lib/supabaseClient'
 import Courtroom from './Courtroom'
+import Dashboard from './Dashboard'
 import BrandHeader from './components/BrandHeader'
 import Card from './components/Card'
 import GameShell from './components/GameShell'
@@ -12,18 +13,12 @@ import CreateTripScreen from './components/onboarding/CreateTripScreen'
 import InviteLinkScreen from './components/onboarding/InviteLinkScreen'
 import JoinScreen from './components/onboarding/JoinScreen'
 import ManifestScreen from './components/onboarding/ManifestScreen'
+import RoleWheel from './components/onboarding/RoleWheel'
 
 const ADMIN_AVATAR = 'ADM'
 
-async function findUserTripId(userId) {
-  const { data, error } = await supabase
-    .from('trip_members')
-    .select('trip_id')
-    .eq('user_id', userId)
-    .limit(1)
-    .maybeSingle()
-  if (error) throw error
-  return data?.trip_id ?? null
+function todayISO() {
+  return new Date().toISOString().slice(0, 10)
 }
 
 async function isTripMember(tripId, userId) {
@@ -37,6 +32,19 @@ async function isTripMember(tripId, userId) {
   return Boolean(data)
 }
 
+// Роль сгорает каждые сутки (role_metadata.assigned_at) — true значит можно
+// идти прямо в Courtroom, false значит нужно сперва прогнать через рулетку.
+async function hasRoleForToday(tripId, userId) {
+  const { data, error } = await supabase
+    .from('trip_members')
+    .select('role_metadata')
+    .eq('trip_id', tripId)
+    .eq('user_id', userId)
+    .maybeSingle()
+  if (error) throw error
+  return data?.role_metadata?.assigned_at === todayISO()
+}
+
 const screenMotion = {
   initial: { opacity: 0, y: 20 },
   animate: { opacity: 1, y: 0 },
@@ -45,35 +53,59 @@ const screenMotion = {
 }
 
 export default function Onboarding() {
-  // 'loading' | 'email' | 'otp' | 'create-trip' | 'invite-link' | 'join' | 'manifest' | 'ready'
+  // 'loading' | 'email' | 'otp' | 'dashboard' | 'create-trip' | 'role-wheel' | 'invite-link' | 'join' | 'manifest' | 'ready'
   const [step, setStep] = useState('loading')
   const [tripId, setTripId] = useState(null)
+  const [tripStatus, setTripStatus] = useState('active')
   const [userId, setUserId] = useState(null)
   const [email, setEmail] = useState('')
   const [toast, setToast] = useState(null)
+  // Куда идти после 'role-wheel' — разное для входа в существующий трип,
+  // создания нового и присоединения по ссылке.
+  const [rolewheelNextStep, setRolewheelNextStep] = useState('ready')
 
-  // Resume an existing trip if the now-authenticated user already belongs
-  // to one, otherwise route to create or join depending on whether the
-  // invite link carried a trip_id.
-  async function routeAuthenticatedUser(user, tripIdFromUrl) {
-    const candidateTripId = tripIdFromUrl ?? (await findUserTripId(user.id))
-    if (candidateTripId && (await isTripMember(candidateTripId, user.id))) {
-      if (!tripIdFromUrl) {
-        window.history.replaceState(null, '', `?trip_id=${candidateTripId}`)
-      }
-      setTripId(candidateTripId)
-      setUserId(user.id)
+  // Enters a specific trip's Courtroom, picking up its current status so a
+  // finished/cancelled trip renders read-only instead of assuming 'active'.
+  // `uid` передаётся явно (не из стейта userId), потому что routeAuthenticatedUser
+  // вызывает setUserId и enterTrip подряд в одной функции — стейт ещё не
+  // успел бы обновиться к моменту, когда он понадобится здесь.
+  async function enterTrip(id, uid) {
+    try {
+      const { data, error } = await supabase.from('trips').select('status').eq('id', id).single()
+      if (error) throw error
+      setTripStatus(data.status)
+    } catch {
+      setTripStatus('active')
+    }
+    setTripId(id)
+
+    const isFresh = await hasRoleForToday(id, uid).catch(() => false)
+    if (isFresh) {
       setStep('ready')
+    } else {
+      setRolewheelNextStep('ready')
+      setStep('role-wheel')
+    }
+  }
+
+  // A trip_id in the URL is a deliberate invite link — resolve it straight
+  // into that trip (or the join screen). With no trip_id, land on the
+  // dashboard instead of guessing "the" trip, since a user can belong to
+  // several at once.
+  async function routeAuthenticatedUser(user, tripIdFromUrl) {
+    setUserId(user.id)
+
+    if (tripIdFromUrl) {
+      if (await isTripMember(tripIdFromUrl, user.id)) {
+        await enterTrip(tripIdFromUrl, user.id)
+      } else {
+        setTripId(tripIdFromUrl)
+        setStep('join')
+      }
       return
     }
 
-    setUserId(user.id)
-    if (tripIdFromUrl) {
-      setTripId(tripIdFromUrl)
-      setStep('join')
-    } else {
-      setStep('create-trip')
-    }
+    setStep('dashboard')
   }
 
   useEffect(() => {
@@ -166,7 +198,8 @@ export default function Onboarding() {
       window.history.replaceState(null, '', `?trip_id=${trip.id}`)
       setTripId(trip.id)
       setUserId(user.id)
-      setStep('invite-link')
+      setRolewheelNextStep('invite-link')
+      setStep('role-wheel')
     } catch (err) {
       setToast({ type: 'error', message: err.message })
     }
@@ -188,14 +221,32 @@ export default function Onboarding() {
       if (memberError) throw memberError
 
       setUserId(user.id)
-      setStep('manifest')
+      setRolewheelNextStep('manifest')
+      setStep('role-wheel')
     } catch (err) {
       setToast({ type: 'error', message: err.message })
     }
   }
 
+  if (step === 'dashboard') {
+    return (
+      <Dashboard
+        userId={userId}
+        onCreateTrip={() => setStep('create-trip')}
+        onOpenTrip={(id) => enterTrip(id, userId)}
+      />
+    )
+  }
+
   if (step === 'ready') {
-    return <Courtroom tripId={tripId} userId={userId} />
+    return (
+      <Courtroom
+        tripId={tripId}
+        userId={userId}
+        tripStatus={tripStatus}
+        onExit={() => setStep('dashboard')}
+      />
+    )
   }
 
   const inviteUrl = tripId
@@ -238,13 +289,30 @@ export default function Onboarding() {
 
           {step === 'create-trip' && (
             <motion.div key="create-trip" {...screenMotion}>
+              <button
+                type="button"
+                onClick={() => setStep('dashboard')}
+                className="mb-3 text-sm font-bold text-ink/70 underline"
+              >
+                ← Назад
+              </button>
               <CreateTripScreen onCreate={handleCreateTrip} />
+            </motion.div>
+          )}
+
+          {step === 'role-wheel' && (
+            <motion.div key="role-wheel" {...screenMotion}>
+              <RoleWheel
+                tripId={tripId}
+                userId={userId}
+                onDone={() => setStep(rolewheelNextStep)}
+              />
             </motion.div>
           )}
 
           {step === 'invite-link' && (
             <motion.div key="invite-link" {...screenMotion}>
-              <InviteLinkScreen inviteUrl={inviteUrl} onContinue={() => setStep('ready')} />
+              <InviteLinkScreen inviteUrl={inviteUrl} onContinue={() => enterTrip(tripId, userId)} />
             </motion.div>
           )}
 
@@ -262,7 +330,7 @@ export default function Onboarding() {
               exit={{ opacity: 0, scale: 0.9 }}
               transition={{ duration: 0.3 }}
             >
-              <ManifestScreen onReady={() => setStep('ready')} />
+              <ManifestScreen onReady={() => enterTrip(tripId, userId)} />
             </motion.div>
           )}
         </AnimatePresence>

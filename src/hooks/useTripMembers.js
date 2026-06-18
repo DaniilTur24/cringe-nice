@@ -5,6 +5,16 @@ function sortByPoints(list) {
   return [...list].sort((a, b) => b.total_points - a.total_points)
 }
 
+function toMember(row) {
+  if (!row.profiles) return null
+  return {
+    id: row.profiles.id,
+    username: row.profiles.username,
+    avatar_url: row.profiles.avatar_url,
+    total_points: row.total_points,
+  }
+}
+
 export function useTripMembers(tripId) {
   const [members, setMembers] = useState([])
   const [loading, setLoading] = useState(true)
@@ -17,14 +27,14 @@ export function useTripMembers(tripId) {
       setLoading(true)
       const { data, error: fetchError } = await supabase
         .from('trip_members')
-        .select('profiles(id, username, avatar_url, total_points)')
+        .select('total_points, profiles(id, username, avatar_url)')
         .eq('trip_id', tripId)
 
       if (cancelled) return
       if (fetchError) {
         setError(fetchError)
       } else {
-        const list = (data ?? []).map((row) => row.profiles).filter(Boolean)
+        const list = (data ?? []).map(toMember).filter(Boolean)
         setMembers(sortByPoints(list))
       }
       setLoading(false)
@@ -36,18 +46,23 @@ export function useTripMembers(tripId) {
     }
   }, [tripId])
 
-  // total_points changes whenever the close_proposal_if_complete trigger
-  // settles a vote; new trip_members rows show up as friends join via the
-  // invite link while this screen is already open.
+  // total_points now lives on trip_members (one counter per trip, not one
+  // global counter per user), so the realtime score updates are scoped to
+  // this trip's rows instead of listening on profiles.
   useEffect(() => {
     const channel = supabase
       .channel(`trip-${tripId}-members`)
       .on(
         'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'profiles' },
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'trip_members',
+          filter: `trip_id=eq.${tripId}`,
+        },
         (payload) => {
           setMembers((prev) => {
-            const idx = prev.findIndex((m) => m.id === payload.new.id)
+            const idx = prev.findIndex((m) => m.id === payload.new.user_id)
             if (idx === -1) return prev
             const updated = [...prev]
             updated[idx] = { ...updated[idx], total_points: payload.new.total_points }
@@ -66,7 +81,7 @@ export function useTripMembers(tripId) {
         async (payload) => {
           const { data, error: profileError } = await supabase
             .from('profiles')
-            .select('id, username, avatar_url, total_points')
+            .select('id, username, avatar_url')
             .eq('id', payload.new.user_id)
             .maybeSingle()
           if (profileError) {
@@ -76,7 +91,7 @@ export function useTripMembers(tripId) {
           if (!data) return
           setMembers((prev) => {
             if (prev.some((m) => m.id === data.id)) return prev
-            return sortByPoints([...prev, data])
+            return sortByPoints([...prev, { ...data, total_points: payload.new.total_points }])
           })
         }
       )

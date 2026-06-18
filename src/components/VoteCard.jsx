@@ -33,32 +33,44 @@ const cardVariants = {
   }),
 }
 
-export default function VoteCard({ proposal, onSubmit }) {
+export default function VoteCard({ proposal, onSubmit, voterRole, voterRoleMetadata }) {
   const [subStep, setSubStep] = useState('choice') // 'choice' | 'slider'
   const [direction, setDirection] = useState(0) // 0 | -1 (reject) | 1 (confirm)
   const [magnitude, setMagnitude] = useState(1)
+  const [isDouble, setIsDouble] = useState(false)
   const [submitting, setSubmitting] = useState(false)
 
   const config = TYPE_CONFIG[proposal.type]
   const score = magnitude * config.sign
   const isDone = direction !== 0
 
+  // Судья может тянуть слайдер до ±20, но только пока есть заряд — иначе
+  // ограничение обычное ±10, никакого отдельного тоггла не нужно.
+  const superVerdictRemaining = voterRoleMetadata?.super_verdict_remaining ?? 0
+  const sliderMax = voterRole === 'judge' && superVerdictRemaining > 0 ? 20 : 10
+
+  // Прокурор удваивает вес голоса — 3 раза в день в текущей роли.
+  const doubleVotesRemaining = 3 - (voterRoleMetadata?.double_vote_count ?? 0)
+  const canDoubleVote = voterRole === 'prosecutor' && doubleVotesRemaining > 0
+
   // onSubmit is awaited so a failed insert (RLS, validation) keeps the card
   // in place instead of flying off as if the vote had been recorded.
-  async function submitVote(value, exitDirection) {
+  async function submitVote(value, exitDirection, weight = 1) {
     setSubmitting(true)
-    const result = await onSubmit?.(value)
+    const result = await onSubmit?.(value, weight)
     setSubmitting(false)
     if (result?.error) return
     setDirection(exitDirection)
   }
 
   function handleReject() {
-    submitVote(0, -1)
+    // Отклонение всегда весом 1 — удвоение Прокурора имеет смысл только для
+    // ненулевого балла, который входит во взвешенное среднее.
+    submitVote(0, -1, 1)
   }
 
   function handleConfirm() {
-    submitVote(score, 1)
+    submitVote(score, 1, isDouble ? 2 : 1)
   }
 
   return (
@@ -134,12 +146,23 @@ export default function VoteCard({ proposal, onSubmit }) {
                   <input
                     type="range"
                     min={1}
-                    max={10}
+                    max={sliderMax}
                     value={magnitude}
                     onChange={(e) => setMagnitude(Number(e.target.value))}
                     className="neo-range mt-4 w-full"
                     style={{ '--thumb-color': config.color }}
                   />
+
+                  {canDoubleVote && (
+                    <label className="mt-4 flex items-center gap-2 rounded-[1rem] border-2 border-ink bg-white/75 p-3 text-sm font-bold">
+                      <input
+                        type="checkbox"
+                        checked={isDouble}
+                        onChange={(e) => setIsDouble(e.target.checked)}
+                      />
+                      Удвоить голос (осталось {doubleVotesRemaining}/3 сегодня)
+                    </label>
+                  )}
 
                   <Button
                     variant={config.agreeVariant}
