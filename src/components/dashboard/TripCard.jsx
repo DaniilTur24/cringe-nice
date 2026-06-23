@@ -66,37 +66,37 @@ export default function TripCard({ trip, onOpen, onLeave, onFinish, onCancel, on
           <p className="font-bold">{trip.name}</p>
           <span className="panel-label mt-2">{STATUS_LABEL[trip.status]}</span>
         </div>
-        <span className="font-extrabold text-french-blue">{trip.total_points} баллов</span>
+        <span className="points-chip shrink-0">{trip.total_points}</span>
       </div>
 
-      <div className="mt-4 flex flex-wrap gap-2">
-        <Button variant="primary" className="flex-1" onClick={() => onOpen(trip.id)}>
+      <div className="mt-4 grid grid-cols-2 gap-2">
+        <Button variant="primary" className="col-span-2 px-3 sm:col-span-1" onClick={() => onOpen(trip.id)}>
           Открыть
         </Button>
 
         {isActive && trip.isAdmin && (
           <>
-            <Button variant="secondary" className="flex-1" onClick={() => setPendingAction('finish')}>
+            <Button variant="secondary" className="px-3" onClick={() => setPendingAction('finish')}>
               Завершить
             </Button>
-            <Button variant="danger" className="flex-1" onClick={() => setPendingAction('cancel')}>
+            <Button variant="danger" className="px-3" onClick={() => setPendingAction('cancel')}>
               Отменить
             </Button>
           </>
         )}
 
         {isActive && !trip.isAdmin && (
-          <Button variant="danger" className="flex-1" onClick={() => setPendingAction('leave')}>
+          <Button variant="danger" className="col-span-2 px-3 sm:col-span-1" onClick={() => setPendingAction('leave')}>
             Выйти
           </Button>
         )}
 
         {!isActive && trip.isAdmin && (
           <>
-            <Button variant="primary" className="flex-1" onClick={() => setPendingAction('restore')}>
+            <Button variant="primary" className="px-3" onClick={() => setPendingAction('restore')}>
               Восстановить
             </Button>
-            <Button variant="danger" className="flex-1" onClick={() => setPendingAction('delete')}>
+            <Button variant="danger" className="px-3" onClick={() => setPendingAction('delete')}>
               Удалить
             </Button>
           </>

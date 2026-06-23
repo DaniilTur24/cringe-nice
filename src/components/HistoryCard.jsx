@@ -13,6 +13,8 @@ const STATUS_LABEL = {
 
 export default function HistoryCard({ proposal, creatorName, canRevealSelf, canRevealAll, onReveal }) {
   const [submitting, setSubmitting] = useState(false)
+  const score = proposal.final_score ?? 0
+  const scoreClass = score > 0 ? 'score-chip--positive' : score < 0 ? 'score-chip--negative' : ''
 
   async function handleReveal(scope) {
     setSubmitting(true)
@@ -21,19 +23,23 @@ export default function HistoryCard({ proposal, creatorName, canRevealSelf, canR
   }
 
   return (
-    <div className="rounded-[1rem] border-2 border-ink bg-white p-3 shadow-[0_4px_0_#130A22]">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-xs font-black uppercase tracking-wide text-ink/55">
+    <div className="case-card pl-5">
+      <div className="flex items-start justify-between gap-3">
+        <span className="case-meta mt-0.5">
           {TYPE_LABEL[proposal.type]} · {STATUS_LABEL[proposal.status]}
         </span>
         {proposal.status === 'approved' && proposal.final_score != null && (
-          <span className="text-sm font-black">{proposal.final_score > 0 ? `+${proposal.final_score}` : proposal.final_score}</span>
+          <span className={`score-chip shrink-0 ${scoreClass}`}>
+            {score > 0 ? `+${score}` : score}
+          </span>
         )}
       </div>
-      <p className="mt-2 text-sm font-bold">
+      <p className="mt-3 text-[1.05rem] font-black leading-snug text-ink">
         {proposal.type === 'fine' ? 'Жалоба на' : 'Награда для'} {proposal.targetName}
       </p>
-      <p className="mt-1 text-xs font-bold text-ink/55">Автор: {creatorName}</p>
+      <p className="mt-1.5 text-xs font-extrabold uppercase tracking-[0.06em] text-ink/55">
+        Автор: <span className="text-ink/70">{creatorName}</span>
+      </p>
 
       {/* Сначала узнать имя (тратит заряд) — выбор "всем" появляется только
           ПОСЛЕ того, как детектив уже увидел автора. */}

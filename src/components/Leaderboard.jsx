@@ -16,7 +16,7 @@ export default function Leaderboard({ members, currentUserId }) {
           <span className="panel-label">Scoreboard</span>
           <h2 className="mt-3 text-2xl font-black leading-tight">Таблица лидеров</h2>
         </div>
-        <span className="rounded-full border-2 border-ink bg-white px-3 py-1 text-sm font-black">
+        <span className="score-chip min-w-10 bg-white px-3 py-2 text-sm">
           {sorted.length}
         </span>
       </div>
@@ -48,7 +48,7 @@ export default function Leaderboard({ members, currentUserId }) {
                   </span>
                 )}
               </span>
-              <span className="rounded-[0.8rem] border-2 border-ink bg-gold px-3 py-2 font-black text-ink">
+              <span className="points-chip">
                 {member.total_points}
               </span>
             </motion.div>
