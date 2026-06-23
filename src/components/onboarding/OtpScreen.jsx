@@ -10,7 +10,7 @@ export default function OtpScreen({ email, onSubmit, onResend, onBack }) {
 
   async function handleSubmit(e) {
     e.preventDefault()
-    if (code.length !== 6) return
+    if (code.length < 6) return
     setSubmitting(true)
     await onSubmit(code)
     setSubmitting(false)
@@ -26,24 +26,24 @@ export default function OtpScreen({ email, onSubmit, onResend, onBack }) {
     <Card>
       <h2 className="text-xl font-bold">Введи код</h2>
       <p className="mt-1 text-sm text-gray-600">
-        Мы отправили 6-значный код на <span className="font-bold">{email}</span>.
+        Мы отправили код на <span className="font-bold">{email}</span>.
       </p>
       <form onSubmit={handleSubmit} className="mt-4 space-y-3">
         <Input
           type="text"
           inputMode="numeric"
           autoComplete="one-time-code"
-          maxLength={6}
+          maxLength={10}
           placeholder="123456"
           value={code}
-          onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+          onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 10))}
           className="text-center text-2xl tracking-[0.5em]"
         />
         <Button
           type="submit"
           variant="primary"
           className="w-full"
-          disabled={submitting || code.length !== 6}
+          disabled={submitting || code.length < 6}
         >
           {submitting ? 'Проверяем...' : 'Войти'}
         </Button>

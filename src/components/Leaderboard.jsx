@@ -2,7 +2,7 @@ import { motion } from 'framer-motion'
 import Card from './Card'
 import { avatarLabel } from '../lib/avatars'
 
-export default function Leaderboard({ members }) {
+export default function Leaderboard({ members, currentUserId }) {
   if (members.length === 0) return null
 
   // Sorts defensively rather than trusting callers to pass pre-sorted data —
@@ -34,7 +34,14 @@ export default function Leaderboard({ members }) {
             >
               <span className="avatar-chip">{avatarLabel(member.avatar_url)}</span>
               <span className="min-w-0">
-                <span className="block truncate font-black">{member.username}</span>
+                <span className="block truncate font-black">
+                  {member.username}
+                  {member.id === currentUserId && (
+                    <span className="ml-2 rounded-full bg-ink/10 px-2 py-0.5 text-[0.62rem] font-black uppercase tracking-wide text-ink/70">
+                      Ты
+                    </span>
+                  )}
+                </span>
                 {(isFirst || isLast) && (
                   <span className="mt-1 inline-flex rounded-full bg-ink px-2 py-0.5 text-[0.62rem] font-black uppercase tracking-wide text-cream">
                     {isFirst ? 'Top seat' : 'Hot seat'}

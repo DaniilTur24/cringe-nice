@@ -10,7 +10,7 @@ const TYPES = [
   { value: 'reward', label: 'Награда', tag: 'Bravo' },
 ]
 
-export default function CreateProposalButton({ tripId, userId, members }) {
+export default function CreateProposalButton({ tripId, userId, members, disabled = false }) {
   const [isOpen, setIsOpen] = useState(false)
   const [type, setType] = useState('fine')
   const [targetId, setTargetId] = useState('')
@@ -44,7 +44,13 @@ export default function CreateProposalButton({ tripId, userId, members }) {
     setSubmitting(false)
 
     if (error) {
-      setToast({ type: 'error', message: error.message })
+      setToast({
+        type: 'error',
+        message:
+          error.code === '23505'
+            ? 'Уже есть дело на рассмотрении — дождись вердикта.'
+            : error.message,
+      })
       return
     }
     setIsOpen(false)
@@ -57,11 +63,12 @@ export default function CreateProposalButton({ tripId, userId, members }) {
       <motion.button
         type="button"
         onClick={openModal}
-        animate={{ y: [0, -8, 0] }}
+        disabled={disabled}
+        animate={disabled ? {} : { y: [0, -8, 0] }}
         transition={{ repeat: Infinity, duration: 1.6, ease: 'easeInOut' }}
-        whileTap={{ scale: 0.9 }}
-        aria-label="Создать новый иск"
-        className="fixed bottom-6 right-6 z-40 flex h-16 w-16 items-center justify-center rounded-full border-[3px] border-ink bg-gold text-4xl font-black leading-none text-ink shadow-neo"
+        whileTap={disabled ? {} : { scale: 0.9 }}
+        aria-label={disabled ? 'Дождись вердикта по текущему делу' : 'Создать новый иск'}
+        className="fixed bottom-6 right-6 z-40 flex h-16 w-16 items-center justify-center rounded-full border-[3px] border-ink bg-gold text-4xl font-black leading-none text-ink shadow-neo disabled:cursor-not-allowed disabled:opacity-40"
       >
         +
       </motion.button>
