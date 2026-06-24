@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import Card from '../Card'
 import Button from '../Button'
 
@@ -7,8 +8,16 @@ const STATUS_LABEL = {
   cancelled: 'Отменена',
 }
 
-export default function TripCard({ trip, onOpen, onRequestAction }) {
+export default function TripCard({ trip, onOpen, onRequestAction, onEditRoleSettings }) {
   const isActive = trip.status === 'active'
+  const [copied, setCopied] = useState(false)
+
+  async function handleCopyInvite() {
+    const inviteUrl = `${window.location.origin}${window.location.pathname}?trip_id=${trip.id}`
+    await navigator.clipboard.writeText(inviteUrl)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
 
   return (
     <Card>
@@ -24,6 +33,20 @@ export default function TripCard({ trip, onOpen, onRequestAction }) {
         <Button variant="primary" className="col-span-2 px-3 sm:col-span-1" onClick={() => onOpen(trip.id)}>
           Открыть
         </Button>
+
+        <Button variant="secondary" className="col-span-2 px-3 sm:col-span-1" onClick={handleCopyInvite}>
+          {copied ? 'Скопировано!' : 'Скопировать ссылку'}
+        </Button>
+
+        {trip.isAdmin && (
+          <Button
+            variant="secondary"
+            className="col-span-2 px-3 sm:col-span-1"
+            onClick={() => onEditRoleSettings(trip.id)}
+          >
+            Настроить роли
+          </Button>
+        )}
 
         {isActive && trip.isAdmin && (
           <Button
