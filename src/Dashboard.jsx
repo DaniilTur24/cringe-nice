@@ -7,6 +7,8 @@ import Button from './components/Button'
 import GameShell from './components/GameShell'
 import Toast from './components/Toast'
 import TripCard from './components/dashboard/TripCard'
+import ConfirmDialog from './components/dashboard/ConfirmDialog'
+import { DIALOG_CONTENT } from './components/dashboard/tripDialogContent'
 
 async function fetchUserTrips(userId) {
   const { data, error } = await supabase
@@ -30,6 +32,8 @@ export default function Dashboard({ userId, onCreateTrip, onOpenTrip }) {
   const [trips, setTrips] = useState([])
   const [loading, setLoading] = useState(true)
   const [toast, setToast] = useState(null)
+  const [pendingTripAction, setPendingTripAction] = useState(null)
+  const [submittingAction, setSubmittingAction] = useState(false)
 
   async function reload() {
     try {
@@ -94,6 +98,19 @@ export default function Dashboard({ userId, onCreateTrip, onOpenTrip }) {
     await reload()
   }
 
+  async function handleConfirmTripAction() {
+    if (!pendingTripAction) return
+
+    setSubmittingAction(true)
+    const { type, tripId } = pendingTripAction
+    if (type === 'leave') await handleLeave(tripId)
+    if (type === 'finish') await handleSetStatus(tripId, 'finished')
+    if (type === 'restore') await handleSetStatus(tripId, 'active')
+    if (type === 'delete') await handleDelete(tripId)
+    setSubmittingAction(false)
+    setPendingTripAction(null)
+  }
+
   const activeTrips = trips.filter((trip) => trip.status === 'active')
   const closedTrips = trips.filter((trip) => trip.status !== 'active')
 
@@ -129,9 +146,7 @@ export default function Dashboard({ userId, onCreateTrip, onOpenTrip }) {
               key={trip.id}
               trip={trip}
               onOpen={onOpenTrip}
-              onLeave={handleLeave}
-              onFinish={(id) => handleSetStatus(id, 'finished')}
-              onCancel={(id) => handleSetStatus(id, 'cancelled')}
+              onRequestAction={(type, tripId) => setPendingTripAction({ type, tripId })}
             />
           ))}
 
@@ -143,18 +158,25 @@ export default function Dashboard({ userId, onCreateTrip, onOpenTrip }) {
                   key={trip.id}
                   trip={trip}
                   onOpen={onOpenTrip}
-                  onRestore={(id) => handleSetStatus(id, 'active')}
-                  onDelete={handleDelete}
+                  onRequestAction={(type, tripId) => setPendingTripAction({ type, tripId })}
                 />
               ))}
             </div>
           )}
 
-          <Button variant="primary" className="w-full" onClick={onCreateTrip}>
+          <Button variant="primary" className="mt-2 w-full" onClick={onCreateTrip}>
             + Создать поездку
           </Button>
         </motion.div>
       </div>
+
+      <ConfirmDialog
+        open={pendingTripAction !== null}
+        submitting={submittingAction}
+        onConfirm={handleConfirmTripAction}
+        onCancel={() => setPendingTripAction(null)}
+        {...(pendingTripAction ? DIALOG_CONTENT[pendingTripAction.type] : {})}
+      />
     </GameShell>
   )
 }

@@ -7,9 +7,11 @@ async function loadHistory(tripId) {
   const { data, error } = await supabase
     .from('proposals')
     .select(
-      `id, type, status, final_score, creator_id, target_id, creator_role, creator_revealed_to_all,
+      `id, type, status, final_score, description, created_at, creator_id, target_id,
+       creator_role, creator_revealed_to_all,
        creator:profiles!proposals_creator_id_fkey(username),
-       target:profiles!proposals_target_id_fkey(username)`
+       target:profiles!proposals_target_id_fkey(username),
+       votes(score)`
     )
     .eq('trip_id', tripId)
     .neq('status', 'pending')
@@ -17,33 +19,29 @@ async function loadHistory(tripId) {
 
   if (error) throw error
 
-  // Призрак полностью исключён из истории — для него записи как будто не
-  // существует, раскрыть нечего.
+  // Призрак полностью исключен из истории: для него записи как будто не существует.
   return (data ?? [])
     .filter((row) => !(row.type === 'fine' && row.creator_role === 'ghost'))
     .map((row) => ({
       ...row,
       creatorName: row.creator?.username ?? 'Неизвестный',
       targetName: row.target?.username ?? 'Неизвестный',
+      votes: row.votes ?? [],
     }))
 }
 
-function isCreatorVisible(proposal, viewerId, selfRevealedIds) {
+function isCreatorVisible(proposal, selfRevealedIds) {
   if (proposal.type === 'reward') return true
   if (proposal.status === 'rejected') return true
-  if (proposal.creator_id === viewerId) return true
   if (proposal.creator_revealed_to_all) return true
   return selfRevealedIds.has(proposal.id)
 }
 
-// roleMetadata приходит проп-ом, а не через свой useTripRole — два хука на
-// один и тот же (tripId, userId) создавали realtime-канал с одинаковым
-// именем одновременно (этот компонент + Courtroom), и Supabase не позволяет
-// повторно навешивать `.on()` на уже подписанный канал с тем же именем.
 export default function ProposalHistory({ tripId, userId, roleMetadata }) {
   const [proposals, setProposals] = useState([])
   const [selfRevealedIds, setSelfRevealedIds] = useState(new Set())
   const [loading, setLoading] = useState(true)
+  const [isExpanded, setIsExpanded] = useState(false)
 
   async function reload() {
     try {
@@ -71,8 +69,6 @@ export default function ProposalHistory({ tripId, userId, roleMetadata }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tripId, userId])
 
-  // Без этого новые закрытые дела (и чужие разоблачения "всем") появлялись
-  // в архиве только после перезагрузки страницы.
   useEffect(() => {
     const channel = supabase
       .channel(`trip-${tripId}-history-${userId}`)
@@ -111,33 +107,44 @@ export default function ProposalHistory({ tripId, userId, roleMetadata }) {
 
   return (
     <Card>
-      <span className="panel-label">Архив</span>
-      <h2 className="mt-3 text-2xl font-black leading-tight">Закрытые дела</h2>
-
-      <div className="mt-4 space-y-3">
-        {proposals.map((proposal) => {
-          const visible = isCreatorVisible(proposal, userId, selfRevealedIds)
-          const selfRevealedByMe = selfRevealedIds.has(proposal.id)
-          const isEligibleFine = proposal.type === 'fine' && proposal.status === 'approved'
-
-          // Сначала "только себе" (тратит заряд) — "всем" появляется только
-          // после того, как этот же детектив уже узнал автора сам.
-          const canRevealSelf = isDetective && isEligibleFine && revealsRemaining > 0 && !visible
-          const canRevealAll =
-            isDetective && isEligibleFine && selfRevealedByMe && !proposal.creator_revealed_to_all
-
-          return (
-            <HistoryCard
-              key={proposal.id}
-              proposal={proposal}
-              creatorName={visible ? proposal.creatorName : 'Аноним'}
-              canRevealSelf={canRevealSelf}
-              canRevealAll={canRevealAll}
-              onReveal={(scope) => handleReveal(proposal.id, scope)}
-            />
-          )
-        })}
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <span className="panel-label">Архив</span>
+          <h2 className="mt-3 text-2xl font-black leading-tight">Закрытые дела</h2>
+        </div>
+        <button
+          type="button"
+          aria-expanded={isExpanded}
+          onClick={() => setIsExpanded((value) => !value)}
+          className="rounded-full border-[3px] border-ink bg-white px-3 py-2 text-xs font-black uppercase leading-none text-ink shadow-neo-sm transition hover:bg-gold focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-gold/60"
+        >
+          {isExpanded ? 'Свернуть' : `Показать ${proposals.length}`}
+        </button>
       </div>
+
+      {isExpanded && (
+        <div className="mt-4 space-y-3">
+          {proposals.map((proposal) => {
+            const visible = isCreatorVisible(proposal, selfRevealedIds)
+            const selfRevealedByMe = selfRevealedIds.has(proposal.id)
+            const isEligibleFine = proposal.type === 'fine' && proposal.status === 'approved'
+            const canRevealSelf = isDetective && isEligibleFine && revealsRemaining > 0 && !visible
+            const canRevealAll =
+              isDetective && isEligibleFine && selfRevealedByMe && !proposal.creator_revealed_to_all
+
+            return (
+              <HistoryCard
+                key={proposal.id}
+                proposal={proposal}
+                creatorName={visible ? proposal.creatorName : 'Аноним'}
+                canRevealSelf={canRevealSelf}
+                canRevealAll={canRevealAll}
+                onReveal={(scope) => handleReveal(proposal.id, scope)}
+              />
+            )
+          })}
+        </div>
+      )}
     </Card>
   )
 }

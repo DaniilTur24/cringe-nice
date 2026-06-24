@@ -11,10 +11,30 @@ const STATUS_LABEL = {
   rejected: 'Отклонено',
 }
 
+const dateFormatter = new Intl.DateTimeFormat('ru-RU', {
+  day: '2-digit',
+  month: 'short',
+  year: 'numeric',
+})
+
+function voteSummary(votes = []) {
+  return votes.reduce(
+    (summary, vote) => {
+      if (vote.score === 0) return { ...summary, against: summary.against + 1 }
+      return { ...summary, for: summary.for + 1 }
+    },
+    { for: 0, against: 0 }
+  )
+}
+
 export default function HistoryCard({ proposal, creatorName, canRevealSelf, canRevealAll, onReveal }) {
   const [submitting, setSubmitting] = useState(false)
+  const [expanded, setExpanded] = useState(false)
   const score = proposal.final_score ?? 0
   const scoreClass = score > 0 ? 'score-chip--positive' : score < 0 ? 'score-chip--negative' : ''
+  const votes = voteSummary(proposal.votes)
+  const isLongDescription = proposal.description.length > 150
+  const formattedDate = dateFormatter.format(new Date(proposal.created_at))
 
   async function handleReveal(scope) {
     setSubmitting(true)
@@ -28,21 +48,39 @@ export default function HistoryCard({ proposal, creatorName, canRevealSelf, canR
         <span className="case-meta mt-0.5">
           {TYPE_LABEL[proposal.type]} · {STATUS_LABEL[proposal.status]}
         </span>
-        {proposal.status === 'approved' && proposal.final_score != null && (
-          <span className={`score-chip shrink-0 ${scoreClass}`}>
-            {score > 0 ? `+${score}` : score}
-          </span>
-        )}
+        <span className={`score-chip shrink-0 ${scoreClass}`}>
+          {score > 0 ? `+${score}` : score}
+        </span>
       </div>
+
       <p className="mt-3 text-[1.05rem] font-black leading-snug text-ink">
         {proposal.type === 'fine' ? 'Жалоба на' : 'Награда для'} {proposal.targetName}
       </p>
+
+      <div className="mt-2 grid grid-cols-1 gap-2 text-xs font-extrabold uppercase tracking-[0.06em] text-ink/60 sm:grid-cols-2">
+        <span>Создано: <strong className="text-ink/75">{formattedDate}</strong></span>
+        <span>За: <strong className="text-ink/75">{votes.for}</strong> · Против: <strong className="text-ink/75">{votes.against}</strong></span>
+      </div>
+
       <p className="mt-1.5 text-xs font-extrabold uppercase tracking-[0.06em] text-ink/55">
         Автор: <span className="text-ink/70">{creatorName}</span>
       </p>
 
-      {/* Сначала узнать имя (тратит заряд) — выбор "всем" появляется только
-          ПОСЛЕ того, как детектив уже увидел автора. */}
+      <div className="mt-3 rounded-[0.9rem] border-2 border-ink bg-white/75 p-3">
+        <p className={`text-sm font-bold leading-relaxed text-ink/72 ${expanded ? '' : 'max-h-20 overflow-hidden'}`}>
+          {proposal.description}
+        </p>
+        {isLongDescription && (
+          <button
+            type="button"
+            className="mt-2 text-xs font-black uppercase text-french-blue underline decoration-2 underline-offset-2"
+            onClick={() => setExpanded((value) => !value)}
+          >
+            {expanded ? 'Свернуть' : 'Подробнее'}
+          </button>
+        )}
+      </div>
+
       {canRevealSelf && (
         <Button
           variant="secondary"
@@ -50,7 +88,7 @@ export default function HistoryCard({ proposal, creatorName, canRevealSelf, canR
           disabled={submitting}
           onClick={() => handleReveal('self')}
         >
-          {submitting ? 'Узнаём...' : 'Разоблачить (узнать автора)'}
+          {submitting ? 'Узнаем...' : 'Разоблачить (узнать автора)'}
         </Button>
       )}
 

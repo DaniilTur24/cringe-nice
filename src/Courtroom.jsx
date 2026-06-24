@@ -266,7 +266,7 @@ export default function Courtroom({ tripId, userId, tripStatus = 'active', onExi
           <button
             type="button"
             onClick={onExit}
-            className="self-start text-sm font-bold text-ink/70 underline"
+            className="self-start rounded-full border-[3px] border-ink bg-gold px-4 py-2 text-sm font-black uppercase leading-tight text-ink shadow-neo-sm transition hover:bg-white focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-gold/60"
           >
             ← К поездкам
           </button>
