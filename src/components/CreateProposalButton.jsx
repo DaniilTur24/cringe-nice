@@ -89,8 +89,16 @@ export default function CreateProposalButton({ tripId, userId, members, disabled
               animate={{ y: 0 }}
               exit={{ y: '100%' }}
               transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-              className="w-full max-w-md rounded-t-[1.35rem] border-[3px] border-ink bg-cream p-5 shadow-neo sm:rounded-[1.35rem] sm:p-6"
+              className="relative w-full max-w-md rounded-t-[1.35rem] border-[3px] border-ink bg-cream p-5 shadow-neo sm:rounded-[1.35rem] sm:p-6"
             >
+              <button
+                type="button"
+                aria-label="Закрыть"
+                onClick={() => setIsOpen(false)}
+                className="absolute right-4 top-4 flex h-10 w-10 items-center justify-center rounded-full border-[3px] border-ink bg-white text-2xl font-black leading-none text-ink shadow-neo-sm transition hover:bg-gold focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-gold/60"
+              >
+                ×
+              </button>
               <span className="panel-label">New round</span>
               <h2 className="mt-4 text-2xl font-black leading-tight">Новый иск</h2>
 
