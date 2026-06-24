@@ -18,7 +18,11 @@ function chargesLabel(roleMetadata) {
     const limit = roleMetadata.reward_limit ?? 3
     const pct = roleMetadata.cashback_pct ?? 25
     const used = Math.min(roleMetadata.reward_create_count ?? 0, limit)
-    return `Кэшбэк ${pct}%: ${used}/${limit} наград использовано`
+    const pending = roleMetadata.pending_cashback ?? 0
+    // Кэшбэк копится скрыто и попадёт в общий счёт только когда роль
+    // сгорит (см. assign_trip_role) — видно только самому Олигарху здесь.
+    const pendingLabel = pending > 0 ? `, накоплено скрыто: ${pending}` : ''
+    return `Кэшбэк ${pct}%: ${used}/${limit} наград использовано${pendingLabel}`
   }
   return null
 }

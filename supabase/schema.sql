@@ -162,6 +162,22 @@ create table public.proposal_reveals (
   primary key (proposal_id, viewer_id)
 );
 
+-- ----------------------------------------------------------------------------
+-- oligarch_reveals — открытая запись о том, что игрок был Олигархом и сколько
+-- скрытого кэшбэка ему перелили в total_points. Кэшбэк копится в
+-- role_metadata->>'pending_cashback' (виден только самому Олигарху, как и
+-- остальной role_metadata — см. trip_members) и переливается в видимый счёт
+-- только когда роль сгорает (см. assign_trip_role) — мгновенное начисление
+-- по таймингу выдало бы Олигарха всем ещё во время голосования.
+-- ----------------------------------------------------------------------------
+create table public.oligarch_reveals (
+  id          uuid primary key default gen_random_uuid(),
+  trip_id     uuid not null references public.trips (id) on delete cascade,
+  user_id     uuid not null references public.profiles (id) on delete cascade,
+  amount      integer not null,
+  revealed_at timestamptz not null default now()
+);
+
 -- ============================================================================
 -- БИЗНЕС-ЛОГИКА: триггеры и функции
 -- ============================================================================
@@ -393,13 +409,21 @@ begin
 
       if v_reward_count < v_reward_limit then
         v_cashback := ceil(v_final_score * v_cashback_pct / 100);
-        update public.trip_members
-        set total_points = total_points + v_cashback
-        where trip_id = v_proposal.trip_id and user_id = v_proposal.creator_id;
+      else
+        v_cashback := 0;
       end if;
 
+      -- Кэшбэк не идёт в total_points сразу: скачок видимого счёта в момент
+      -- одобрения чужой награды по таймингу выдал бы Олигарха остальным.
+      -- Копим в pending_cashback (виден только самому Олигарху через его
+      -- role_metadata) — переливается в total_points и раскрывается всем
+      -- только когда роль сгорает, см. flush в assign_trip_role().
       update public.trip_members
-      set role_metadata = jsonb_set(role_metadata, '{reward_create_count}', to_jsonb(v_reward_count + 1))
+      set role_metadata = jsonb_set(
+        jsonb_set(role_metadata, '{reward_create_count}', to_jsonb(v_reward_count + 1)),
+        '{pending_cashback}',
+        to_jsonb(coalesce((v_oligarch ->> 'pending_cashback')::integer, 0) + v_cashback)
+      )
       where trip_id = v_proposal.trip_id and user_id = v_proposal.creator_id;
     end if;
 
@@ -520,6 +544,8 @@ declare
   v_detective_charges  integer;
   v_oligarch_pct       numeric;
   v_oligarch_limit     integer;
+  v_flush_amount       integer;
+  v_stale_member       record;
 begin
   perform pg_advisory_xact_lock(hashtext(p_trip_id::text));
 
@@ -539,18 +565,54 @@ begin
     return v_existing;
   end if;
 
+  -- Роль сейчас будет перезаписана ниже — если это была роль Олигарха,
+  -- сначала переливаем накопленный скрытый кэшбэк в видимый total_points и
+  -- публикуем открытое раскрытие (oligarch_reveals), иначе баллы тихо
+  -- потерялись бы вместе со старым role_metadata.
+  if v_existing is not null and (v_existing ->> 'role') = 'oligarch' then
+    v_flush_amount := coalesce((v_existing ->> 'pending_cashback')::integer, 0);
+    if v_flush_amount > 0 then
+      update public.trip_members
+      set total_points = total_points + v_flush_amount
+      where trip_id = p_trip_id and user_id = p_user_id;
+
+      insert into public.oligarch_reveals (trip_id, user_id, amount)
+      values (p_trip_id, p_user_id, v_flush_amount);
+    end if;
+  end if;
+
   -- Lazy global expiry: чужая роль со вчера (или раньше), которую владелец
   -- ещё не переразыграл сегодня сам, не должна блокировать пул для
   -- остальных — сбрасываем её на civilian, не трогая assigned_at, чтобы при
   -- собственном визите этот участник всё равно увидел колесо, а не "роль
-  -- уже разыграна сегодня".
-  update public.trip_members
-  set role_metadata = jsonb_build_object('role', 'civilian', 'assigned_at', role_metadata ->> 'assigned_at')
-  where trip_id = p_trip_id
-    and user_id <> p_user_id
-    and (role_metadata ->> 'role') is not null
-    and (role_metadata ->> 'role') <> 'civilian'
-    and (role_metadata ->> 'assigned_at') is distinct from v_today;
+  -- уже разыграна сегодня". Протухшим Олигархам в этом же проходе флушим
+  -- кэшбэк и раскрываем — по той же причине, что и для себя выше.
+  for v_stale_member in
+    select user_id, role_metadata
+    from public.trip_members
+    where trip_id = p_trip_id
+      and user_id <> p_user_id
+      and (role_metadata ->> 'role') is not null
+      and (role_metadata ->> 'role') <> 'civilian'
+      and (role_metadata ->> 'assigned_at') is distinct from v_today
+  loop
+    v_flush_amount := 0;
+    if (v_stale_member.role_metadata ->> 'role') = 'oligarch' then
+      v_flush_amount := coalesce((v_stale_member.role_metadata ->> 'pending_cashback')::integer, 0);
+    end if;
+
+    update public.trip_members
+    set total_points = total_points + v_flush_amount,
+        role_metadata = jsonb_build_object(
+          'role', 'civilian', 'assigned_at', v_stale_member.role_metadata ->> 'assigned_at'
+        )
+    where trip_id = p_trip_id and user_id = v_stale_member.user_id;
+
+    if v_flush_amount > 0 then
+      insert into public.oligarch_reveals (trip_id, user_id, amount)
+      values (p_trip_id, v_stale_member.user_id, v_flush_amount);
+    end if;
+  end loop;
 
   -- Собственная (возможно устаревшая) роль не должна блокировать сама себя
   -- при реролле — исключаем себя из списка "занятых".
@@ -598,7 +660,7 @@ begin
     when 'judge'       then jsonb_build_object('role', 'judge', 'super_verdict_remaining', 2)
     when 'ghost'        then jsonb_build_object('role', 'ghost')
     when 'oligarch'     then jsonb_build_object(
-      'role', 'oligarch', 'reward_create_count', 0,
+      'role', 'oligarch', 'reward_create_count', 0, 'pending_cashback', 0,
       'reward_limit', v_oligarch_limit, 'cashback_pct', v_oligarch_pct
     )
     when 'detective'    then jsonb_build_object(
@@ -722,6 +784,7 @@ alter table public.trip_members    enable row level security;
 alter table public.proposals       enable row level security;
 alter table public.votes           enable row level security;
 alter table public.proposal_reveals enable row level security;
+alter table public.oligarch_reveals enable row level security;
 
 -- ---------------------------------------------------------------- profiles --
 create policy "profiles_select_all"
@@ -883,3 +946,12 @@ create policy "proposal_reveals_select_own"
 
 -- INSERT/UPDATE/DELETE не разрешены пользователям — пишет только
 -- detective_reveal() (security definer обходит RLS).
+
+-- --------------------------------------------------------- oligarch_reveals --
+create policy "oligarch_reveals_select_trip_members"
+  on public.oligarch_reveals for select
+  to authenticated
+  using (public.is_trip_member(trip_id, auth.uid()));
+
+-- INSERT/UPDATE/DELETE не разрешены пользователям — пишет только
+-- assign_trip_role() (security definer обходит RLS).

@@ -270,6 +270,46 @@ export default function Courtroom({ tripId, userId, tripStatus = 'active', profi
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tripId])
 
+  // Олигарх копит кэшбэк скрыто (role_metadata.pending_cashback, виден
+  // только ему) — когда его роль сгорает, assign_trip_role() переливает
+  // сумму в total_points и вставляет строку сюда. Без этого попапа скачок
+  // чужого счёта на видном месте выглядел бы необъяснимым.
+  useEffect(() => {
+    const channel = supabase
+      .channel(`trip-${tripId}-oligarch-reveals`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'oligarch_reveals',
+          filter: `trip_id=eq.${tripId}`,
+        },
+        async (payload) => {
+          let username = membersByIdRef.current.get(payload.new.user_id)?.username
+          if (!username) {
+            const { data } = await supabase
+              .from('profiles')
+              .select('username')
+              .eq('id', payload.new.user_id)
+              .maybeSingle()
+            username = data?.username ?? 'Неизвестный'
+          }
+          setVerdictQueue((prev) => [
+            ...prev,
+            {
+              message: `${username} был Олигархом и тайно копил кэшбэк — теперь ${payload.new.amount} баллов добавлены в общий счёт!`,
+            },
+          ])
+        }
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [tripId])
+
   async function handleSubmitVote(proposalId, score, weight = 1) {
     const { error } = await supabase
       .from('votes')
