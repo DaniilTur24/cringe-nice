@@ -8,12 +8,13 @@ import GameShell from './components/GameShell'
 import Toast from './components/Toast'
 import TripCard from './components/dashboard/TripCard'
 import ConfirmDialog from './components/dashboard/ConfirmDialog'
+import RoleSettingsDialog from './components/dashboard/RoleSettingsDialog'
 import { DIALOG_CONTENT } from './components/dashboard/tripDialogContent'
 
 async function fetchUserTrips(userId) {
   const { data, error } = await supabase
     .from('trip_members')
-    .select('total_points, trips(id, name, status, admin_id)')
+    .select('total_points, trips(id, name, status, admin_id, settings)')
     .eq('user_id', userId)
   if (error) throw error
 
@@ -25,6 +26,7 @@ async function fetchUserTrips(userId) {
       status: row.trips.status,
       isAdmin: row.trips.admin_id === userId,
       total_points: row.total_points,
+      settings: row.trips.settings ?? {},
     }))
 }
 
@@ -34,6 +36,17 @@ export default function Dashboard({ userId, profileMenu, onCreateTrip, onOpenTri
   const [toast, setToast] = useState(null)
   const [pendingTripAction, setPendingTripAction] = useState(null)
   const [submittingAction, setSubmittingAction] = useState(false)
+  const [roleSettingsTripId, setRoleSettingsTripId] = useState(null)
+  const [roleSettingsToken, setRoleSettingsToken] = useState(0)
+  const [submittingRoleSettings, setSubmittingRoleSettings] = useState(false)
+
+  // Bumped on every "open" click (even reopening the same trip) so the
+  // dialog remounts with fresh initial values; left untouched on close so
+  // the exit animation can play instead of the dialog disappearing instantly.
+  function openRoleSettings(tripId) {
+    setRoleSettingsTripId(tripId)
+    setRoleSettingsToken((token) => token + 1)
+  }
 
   async function reload() {
     try {
@@ -98,6 +111,18 @@ export default function Dashboard({ userId, profileMenu, onCreateTrip, onOpenTri
     await reload()
   }
 
+  async function handleSaveRoleSettings(settings) {
+    setSubmittingRoleSettings(true)
+    const { error } = await supabase.from('trips').update({ settings }).eq('id', roleSettingsTripId)
+    setSubmittingRoleSettings(false)
+    if (error) {
+      setToast({ type: 'error', message: error.message })
+      return
+    }
+    setRoleSettingsTripId(null)
+    await reload()
+  }
+
   async function handleConfirmTripAction() {
     if (!pendingTripAction) return
 
@@ -147,6 +172,7 @@ export default function Dashboard({ userId, profileMenu, onCreateTrip, onOpenTri
               trip={trip}
               onOpen={onOpenTrip}
               onRequestAction={(type, tripId) => setPendingTripAction({ type, tripId })}
+              onEditRoleSettings={openRoleSettings}
             />
           ))}
 
@@ -159,6 +185,7 @@ export default function Dashboard({ userId, profileMenu, onCreateTrip, onOpenTri
                   trip={trip}
                   onOpen={onOpenTrip}
                   onRequestAction={(type, tripId) => setPendingTripAction({ type, tripId })}
+                  onEditRoleSettings={openRoleSettings}
                 />
               ))}
             </div>
@@ -176,6 +203,15 @@ export default function Dashboard({ userId, profileMenu, onCreateTrip, onOpenTri
         onConfirm={handleConfirmTripAction}
         onCancel={() => setPendingTripAction(null)}
         {...(pendingTripAction ? DIALOG_CONTENT[pendingTripAction.type] : {})}
+      />
+
+      <RoleSettingsDialog
+        key={roleSettingsToken}
+        open={roleSettingsTripId !== null}
+        initialSettings={trips.find((trip) => trip.id === roleSettingsTripId)?.settings}
+        submitting={submittingRoleSettings}
+        onSave={handleSaveRoleSettings}
+        onCancel={() => setRoleSettingsTripId(null)}
       />
     </GameShell>
   )
