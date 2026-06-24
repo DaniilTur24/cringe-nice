@@ -1,11 +1,15 @@
 import Onboarding from './Onboarding'
 import ErrorBoundary from './components/ErrorBoundary'
+import BackgroundMusic from './components/BackgroundMusic'
 
 function App() {
   return (
-    <ErrorBoundary>
-      <Onboarding />
-    </ErrorBoundary>
+    <>
+      <BackgroundMusic />
+      <ErrorBoundary>
+        <Onboarding />
+      </ErrorBoundary>
+    </>
   )
 }
 
