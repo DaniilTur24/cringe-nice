@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabaseClient'
 import Card from './Card'
 import HistoryCard from './HistoryCard'
@@ -40,10 +40,18 @@ function isCreatorVisible(proposal, viewerId, selfRevealedIds) {
 // один и тот же (tripId, userId) создавали realtime-канал с одинаковым
 // именем одновременно (этот компонент + Courtroom), и Supabase не позволяет
 // повторно навешивать `.on()` на уже подписанный канал с тем же именем.
-export default function ProposalHistory({ tripId, userId, roleMetadata }) {
+export default function ProposalHistory({ tripId, userId, roleMetadata, members = [] }) {
   const [proposals, setProposals] = useState([])
   const [selfRevealedIds, setSelfRevealedIds] = useState(new Set())
   const [loading, setLoading] = useState(true)
+
+  // members carries each member's per-trip nickname (see useTripMembers) — a
+  // ref so reload() always reads the latest list without re-running on every
+  // members change (it's already kept fresh by Courtroom's own subscription).
+  const membersByIdRef = useRef(new Map())
+  useEffect(() => {
+    membersByIdRef.current = new Map(members.map((m) => [m.id, m]))
+  }, [members])
 
   async function reload() {
     try {
@@ -51,7 +59,12 @@ export default function ProposalHistory({ tripId, userId, roleMetadata }) {
         loadHistory(tripId),
         supabase.from('proposal_reveals').select('proposal_id').eq('viewer_id', userId),
       ])
-      setProposals(history)
+      const named = history.map((p) => ({
+        ...p,
+        creatorName: membersByIdRef.current.get(p.creator_id)?.username ?? p.creatorName,
+        targetName: membersByIdRef.current.get(p.target_id)?.username ?? p.targetName,
+      }))
+      setProposals(named)
       setSelfRevealedIds(new Set((reveals ?? []).map((r) => r.proposal_id)))
     } finally {
       setLoading(false)

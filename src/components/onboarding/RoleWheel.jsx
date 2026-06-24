@@ -25,8 +25,10 @@ export default function RoleWheel({ tripId, userId, onDone }) {
       .select('user_id, role_metadata')
       .eq('trip_id', tripId)
 
+    const today = todayISO()
     const taken = (data ?? [])
       .filter((m) => m.user_id !== userId)
+      .filter((m) => m.role_metadata?.assigned_at === today)
       .map((m) => m.role_metadata?.role)
       .filter((role) => role && role !== 'civilian')
     setTakenRoles(taken)

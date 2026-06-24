@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence } from 'framer-motion'
 import { supabase } from './lib/supabaseClient'
 import { useTripMembers } from './hooks/useTripMembers'
@@ -83,7 +83,7 @@ function proposalCardContent(proposal) {
   }
 }
 
-export default function Courtroom({ tripId, userId, tripStatus = 'active', onExit }) {
+export default function Courtroom({ tripId, userId, tripStatus = 'active', profileMenu, onExit }) {
   const [loading, setLoading] = useState(true)
   // Every still-open proposal stays in this list at once, so two complaints
   // or rewards filed back to back both stay visible instead of the newer
@@ -94,6 +94,26 @@ export default function Courtroom({ tripId, userId, tripStatus = 'active', onExi
   const [dismissedMembersError, setDismissedMembersError] = useState(null)
   const { members, error: membersError } = useTripMembers(tripId)
   const { roleMetadata } = useTripRole(tripId, userId)
+
+  // members carries each member's per-trip nickname already (see
+  // useTripMembers) — used to relabel proposal creator/target names so the
+  // in-game name matches the leaderboard instead of the official profile name.
+  const membersById = useMemo(() => new Map(members.map((m) => [m.id, m])), [members])
+  const membersByIdRef = useRef(membersById)
+  useEffect(() => {
+    membersByIdRef.current = membersById
+  }, [membersById])
+
+  // `map` defaults to the render-time Map; the realtime channel below lives
+  // outside render and passes membersByIdRef.current instead, since reading
+  // a ref's value during render is disallowed.
+  function withTripNames(proposal, map = membersById) {
+    return {
+      ...proposal,
+      creatorName: map.get(proposal.creator_id)?.username ?? proposal.creatorName,
+      targetName: map.get(proposal.target_id)?.username ?? proposal.targetName,
+    }
+  }
 
   // membersError comes from a hook value, not a user action, so it's folded
   // into the toast at render time instead of synced via setState-in-effect.
@@ -200,10 +220,11 @@ export default function Courtroom({ tripId, userId, tripStatus = 'active', onExi
           if (payload.new.creator_revealed_to_all) {
             loadProposalDetails(payload.new.id)
               .then((details) => {
+                const named = withTripNames(details, membersByIdRef.current)
                 setVerdictQueue((prev) => [
                   ...prev,
                   {
-                    message: `Детектив раскрыл автора жалобы на ${details.targetName} — это ${details.creatorName}!`,
+                    message: `Детектив раскрыл автора жалобы на ${named.targetName} — это ${named.creatorName}!`,
                   },
                 ])
               })
@@ -227,7 +248,7 @@ export default function Courtroom({ tripId, userId, tripStatus = 'active', onExi
               ...prev,
               {
                 message: buildVerdictMessage(
-                  current,
+                  withTripNames(current, membersByIdRef.current),
                   payload.new.status,
                   payload.new.final_score,
                   judgeOverrideScore
@@ -243,6 +264,10 @@ export default function Courtroom({ tripId, userId, tripStatus = 'active', onExi
     return () => {
       supabase.removeChannel(channel)
     }
+    // withTripNames always takes membersByIdRef.current explicitly here, so
+    // it doesn't need to be a dep — re-subscribing on every member change
+    // would tear down and recreate the realtime channel for no reason.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tripId])
 
   async function handleSubmitVote(proposalId, score, weight = 1) {
@@ -260,7 +285,7 @@ export default function Courtroom({ tripId, userId, tripStatus = 'active', onExi
   }
 
   return (
-    <GameShell>
+    <GameShell topRight={profileMenu}>
       <div className="flex flex-1 flex-col gap-6 pb-24">
         {onExit && (
           <button
@@ -312,7 +337,7 @@ export default function Courtroom({ tripId, userId, tripStatus = 'active', onExi
         {!loading &&
           proposals.map((proposal) => {
             const isSpectator = proposal.creator_id === userId || proposal.target_id === userId
-            const proposalForCard = proposalCardContent(proposal)
+            const proposalForCard = proposalCardContent(withTripNames(proposal))
 
             if (isSpectator) {
               return (
@@ -350,7 +375,7 @@ export default function Courtroom({ tripId, userId, tripStatus = 'active', onExi
 
         <Leaderboard members={members} currentUserId={userId} />
 
-        <ProposalHistory tripId={tripId} userId={userId} roleMetadata={roleMetadata} />
+        <ProposalHistory tripId={tripId} userId={userId} roleMetadata={roleMetadata} members={members} />
       </div>
 
       {tripStatus === 'active' && (

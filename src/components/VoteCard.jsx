@@ -49,8 +49,11 @@ export default function VoteCard({ proposal, onSubmit, voterRole, voterRoleMetad
   const superVerdictRemaining = voterRoleMetadata?.super_verdict_remaining ?? 0
   const sliderMax = voterRole === 'judge' && superVerdictRemaining > 0 ? 20 : 10
 
-  // Прокурор удваивает вес голоса — 3 раза в день в текущей роли.
-  const doubleVotesRemaining = 3 - (voterRoleMetadata?.double_vote_count ?? 0)
+  // Прокурор удваивает вес голоса — лимит в день задаётся админом при
+  // создании поездки (double_vote_limit, снятый в role_metadata при
+  // розыгрыше роли).
+  const doubleVoteLimit = voterRoleMetadata?.double_vote_limit ?? 3
+  const doubleVotesRemaining = doubleVoteLimit - (voterRoleMetadata?.double_vote_count ?? 0)
   const canDoubleVote = voterRole === 'prosecutor' && doubleVotesRemaining > 0
 
   // onSubmit is awaited so a failed insert (RLS, validation) keeps the card
@@ -160,7 +163,7 @@ export default function VoteCard({ proposal, onSubmit, voterRole, voterRoleMetad
                         checked={isDouble}
                         onChange={(e) => setIsDouble(e.target.checked)}
                       />
-                      Удвоить голос (осталось {doubleVotesRemaining}/3 сегодня)
+                      Удвоить голос (осталось {doubleVotesRemaining}/{doubleVoteLimit} сегодня)
                     </label>
                   )}
 

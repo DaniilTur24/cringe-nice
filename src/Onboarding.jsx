@@ -14,11 +14,22 @@ import InviteLinkScreen from './components/onboarding/InviteLinkScreen'
 import JoinScreen from './components/onboarding/JoinScreen'
 import ManifestScreen from './components/onboarding/ManifestScreen'
 import RoleWheel from './components/onboarding/RoleWheel'
+import ProfileMenu from './components/ProfileMenu'
 
 const ADMIN_AVATAR = 'ADM'
 
 function todayISO() {
   return new Date().toISOString().slice(0, 10)
+}
+
+async function fetchProfile(userId) {
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('username, avatar_url')
+    .eq('id', userId)
+    .maybeSingle()
+  if (error) throw error
+  return data
 }
 
 async function isTripMember(tripId, userId) {
@@ -59,6 +70,7 @@ export default function Onboarding() {
   const [tripStatus, setTripStatus] = useState('active')
   const [userId, setUserId] = useState(null)
   const [email, setEmail] = useState('')
+  const [profile, setProfile] = useState(null)
   const [toast, setToast] = useState(null)
   // Куда идти после 'role-wheel' — разное для входа в существующий трип,
   // создания нового и присоединения по ссылке.
@@ -92,12 +104,10 @@ export default function Onboarding() {
   // into that trip (or the join screen). With no trip_id, land on the
   // dashboard instead of guessing "the" trip, since a user can belong to
   // several at once.
-  async function routeAuthenticatedUser(user, tripIdFromUrl) {
-    setUserId(user.id)
-
+  async function continueAfterAuth(uid, tripIdFromUrl) {
     if (tripIdFromUrl) {
-      if (await isTripMember(tripIdFromUrl, user.id)) {
-        await enterTrip(tripIdFromUrl, user.id)
+      if (await isTripMember(tripIdFromUrl, uid)) {
+        await enterTrip(tripIdFromUrl, uid)
       } else {
         setTripId(tripIdFromUrl)
         setStep('join')
@@ -106,6 +116,52 @@ export default function Onboarding() {
     }
 
     setStep('dashboard')
+  }
+
+  // Профиль теперь различается только почтой — никакого отдельного шага
+  // "как тебя зовут" при первом входе. username — служебное поле (берём
+  // локальную часть почты), реальное имя пользователь вводит каждый раз
+  // отдельно при входе/создании конкретной поездки (nickname в trip_members).
+  async function routeAuthenticatedUser(user, tripIdFromUrl) {
+    setUserId(user.id)
+    setEmail(user.email ?? '')
+
+    let activeProfile = await fetchProfile(user.id)
+    if (!activeProfile) {
+      const placeholderName = (user.email ?? 'user').split('@')[0]
+      const { data, error } = await supabase
+        .from('profiles')
+        .insert([{ id: user.id, username: placeholderName, avatar_url: null }])
+        .select('username, avatar_url')
+        .single()
+      if (error) throw error
+      activeProfile = data
+    }
+
+    setProfile(activeProfile)
+    await continueAfterAuth(user.id, tripIdFromUrl)
+  }
+
+  async function handleGoogleSignIn() {
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: { redirectTo: window.location.href },
+      })
+      if (error) throw error
+    } catch (err) {
+      setToast({ type: 'error', message: err.message })
+    }
+  }
+
+  async function handleLogout() {
+    await supabase.auth.signOut()
+    setUserId(null)
+    setProfile(null)
+    setEmail('')
+    setTripId(null)
+    window.history.replaceState(null, '', window.location.pathname)
+    setStep('email')
   }
 
   useEffect(() => {
@@ -171,28 +227,26 @@ export default function Onboarding() {
     }
   }
 
-  async function handleCreateTrip(tripName, adminName) {
+  async function handleCreateTrip(tripName, adminName, roleSettings) {
     try {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) throw new Error('Сессия истекла, войди заново.')
 
-      // upsert, not insert: a retry after a failed trip/member insert would
-      // otherwise 409 on a profile that already exists from the first try.
-      const { error: profileError } = await supabase
-        .from('profiles')
-        .upsert([{ id: user.id, username: adminName, avatar_url: ADMIN_AVATAR }])
-      if (profileError) throw profileError
-
       const { data: trip, error: tripError } = await supabase
         .from('trips')
-        .insert([{ name: tripName, admin_id: user.id, settings: {} }])
+        .insert([{ name: tripName, admin_id: user.id, settings: roleSettings ?? {} }])
         .select()
         .single()
       if (tripError) throw tripError
 
+      // nickname/avatar_url здесь — имя только для этой поездки, не трогает
+      // служебное profiles.username (см. routeAuthenticatedUser).
       const { error: memberError } = await supabase
         .from('trip_members')
-        .upsert([{ trip_id: trip.id, user_id: user.id }], { onConflict: 'trip_id,user_id' })
+        .upsert(
+          [{ trip_id: trip.id, user_id: user.id, nickname: adminName, avatar_url: ADMIN_AVATAR }],
+          { onConflict: 'trip_id,user_id' }
+        )
       if (memberError) throw memberError
 
       window.history.replaceState(null, '', `?trip_id=${trip.id}`)
@@ -210,14 +264,12 @@ export default function Onboarding() {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) throw new Error('Сессия истекла, войди заново.')
 
-      const { error: profileError } = await supabase
-        .from('profiles')
-        .upsert([{ id: user.id, username, avatar_url: avatar }])
-      if (profileError) throw profileError
-
       const { error: memberError } = await supabase
         .from('trip_members')
-        .upsert([{ trip_id: tripId, user_id: user.id }], { onConflict: 'trip_id,user_id' })
+        .upsert(
+          [{ trip_id: tripId, user_id: user.id, nickname: username, avatar_url: avatar }],
+          { onConflict: 'trip_id,user_id' }
+        )
       if (memberError) throw memberError
 
       setUserId(user.id)
@@ -228,10 +280,15 @@ export default function Onboarding() {
     }
   }
 
+  const profileMenu = profile ? (
+    <ProfileMenu profile={profile} email={email} onLogout={handleLogout} />
+  ) : null
+
   if (step === 'dashboard') {
     return (
       <Dashboard
         userId={userId}
+        profileMenu={profileMenu}
         onCreateTrip={() => setStep('create-trip')}
         onOpenTrip={(id) => enterTrip(id, userId)}
       />
@@ -244,6 +301,7 @@ export default function Onboarding() {
         tripId={tripId}
         userId={userId}
         tripStatus={tripStatus}
+        profileMenu={profileMenu}
         onExit={() => setStep('dashboard')}
       />
     )
@@ -253,8 +311,10 @@ export default function Onboarding() {
     ? `${window.location.origin}${window.location.pathname}?trip_id=${tripId}`
     : ''
 
+  const tripIdFromUrl = new URLSearchParams(window.location.search).get('trip_id')
+
   return (
-    <GameShell>
+    <GameShell topRight={profileMenu}>
       <div className="flex flex-1 flex-col justify-center gap-6">
         <BrandHeader />
 
@@ -272,7 +332,11 @@ export default function Onboarding() {
 
           {step === 'email' && (
             <motion.div key="email" {...screenMotion}>
-              <EmailScreen onSubmit={handleEmailSubmit} />
+              <EmailScreen
+                onSubmit={handleEmailSubmit}
+                onGoogleSignIn={handleGoogleSignIn}
+                inviteNotice={tripIdFromUrl ? 'Войди, чтобы присоединиться к поездке по ссылке.' : null}
+              />
             </motion.div>
           )}
 

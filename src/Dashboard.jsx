@@ -26,7 +26,7 @@ async function fetchUserTrips(userId) {
     }))
 }
 
-export default function Dashboard({ userId, onCreateTrip, onOpenTrip }) {
+export default function Dashboard({ userId, profileMenu, onCreateTrip, onOpenTrip }) {
   const [trips, setTrips] = useState([])
   const [loading, setLoading] = useState(true)
   const [toast, setToast] = useState(null)
@@ -98,7 +98,7 @@ export default function Dashboard({ userId, onCreateTrip, onOpenTrip }) {
   const closedTrips = trips.filter((trip) => trip.status !== 'active')
 
   return (
-    <GameShell>
+    <GameShell topRight={profileMenu}>
       <div className="flex flex-1 flex-col gap-6 pb-10">
         <BrandHeader kicker="Твои поездки" />
 

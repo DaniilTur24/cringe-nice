@@ -9,27 +9,32 @@
 --   - "Согласен" + слайдер   -> fine:   score от -10 до -1 (±20 для Судьи с зарядом)
 --                                reward: score от  1 до 10 (±20 для Судьи с зарядом)
 --
--- Правило закрытия (большинство):
---   - zero_votes  = голоса со score = 0   ("отклонить")
---   - nonzero_votes = голоса со score <> 0 ("согласен")
---   - если zero_votes >= 50% от всех голосов  -> status = 'rejected'
+-- Правило закрытия (большинство по ВЕСУ голоса, не по числу голосовавших):
+--   - zero_weight  = сумма weight у голосов со score = 0   ("отклонить")
+--   - total_weight = сумма weight по всем голосам
+--   - если zero_weight >= 50% от total_weight  -> status = 'rejected'
 --       fine:   1 балл списывается у creator_id ТОЛЬКО СЕЙЧАС (не при создании —
 --               анонимность жалобы держится до этого момента), кроме Призрака
 --       reward: ничего не происходит (баллы не списывались)
---   - иначе (nonzero_votes > 50%)              -> status = 'approved'
+--   - иначе                                     -> status = 'approved'
 --       target_id получает ROUND(взвешенного среднего: score*weight) по
 --       ненулевым голосам (вес даёт Прокурор-удвоение), это же значение
 --       сохраняется в proposals.final_score для UI (попап вердикта)
 --       fine:   никакого списания/возврата (залог никогда не брался)
---       reward: Олигарх (создатель) получает доп. кэшбэк 25% от final_score
---               на первые 3 поданные им награды в этом трипе
+--       reward: Олигарх (создатель) получает доп. кэшбэк (% и лимит наград
+--               настраиваются админом при создании поездки — trips.settings,
+--               по умолчанию 25% на первые 3 награды), попытка тратится
+--               только при approved (как и заряд Судьи)
 --
 -- Скрытые роли (5 уникальных на trip_id + безлимитный "civilian" для
 -- остальных) живут в trip_members.role_metadata (jsonb) и сгорают каждые
--- сутки — assign_trip_role() пересобирает их с нуля при новом дне. Анонимность
--- автора жалобы: скрыт всегда, кроме (а) автоматического раскрытия при
--- rejected, (б) ручного раскрытия Детективом через detective_reveal(). Призрак
--- исключён из истории полностью — его не раскрыть никогда.
+-- сутки — assign_trip_role() пересобирает их с нуля при новом дне. Дневные
+-- лимиты Прокурора/Детектива и кэшбэк/лимит Олигарха настраиваются админом
+-- per-trip (trips.settings), снимаются снапшотом в role_metadata при
+-- розыгрыше роли — см. assign_trip_role(). Анонимность автора жалобы: скрыт
+-- всегда, кроме (а) автоматического раскрытия при rejected, (б) ручного
+-- раскрытия Детективом через detective_reveal(). Призрак исключён из истории
+-- полностью — его не раскрыть никогда.
 -- ============================================================================
 
 create extension if not exists "pgcrypto";
@@ -52,6 +57,10 @@ create table public.trips (
   id        uuid primary key default gen_random_uuid(),
   name      text not null,
   admin_id  uuid not null references public.profiles (id) on delete restrict,
+  -- Per-trip role config set by the admin at creation, e.g.
+  -- { oligarch_cashback_pct, oligarch_reward_limit, prosecutor_daily_charges,
+  --   detective_daily_charges }. Missing key = old hardcoded default
+  -- (see assign_trip_role()/close_proposal_if_complete()).
   settings  jsonb not null default '{}'::jsonb,
   -- 'active' until the creator explicitly Finishes or Cancels it.
   status    text not null default 'active' check (status in ('active', 'finished', 'cancelled'))
@@ -69,6 +78,11 @@ create table public.trip_members (
   -- assign_trip_role(), sgорает каждые сутки (assigned_at), пересобирается с
   -- нуля при новом розыгрыше. '{}' до первого спина рулетки.
   role_metadata jsonb not null default '{}'::jsonb,
+  -- Per-trip override of profiles.username/avatar_url — lets someone use a
+  -- joke name in one trip without touching their official profile name.
+  -- NULL means "use the profile's name/avatar as-is".
+  nickname      text,
+  avatar_url    text,
   primary key (trip_id, user_id)
 );
 
@@ -99,9 +113,6 @@ create table public.proposals (
   -- чтобы знать про Призрака/Олигарха без join по trip_members, который к
   -- моменту чтения истории мог бы уже отражать другую (сегодняшнюю) роль.
   creator_role text,
-  -- true только если автор был Олигархом и это одна из его первых 3 наград
-  -- в этом трипе — close_proposal_if_complete() начисляет кэшбэк при approved.
-  oligarch_cashback_eligible boolean not null default false,
   -- Жалоба анонимна, пока это не true. Ставится либо автоматически при
   -- rejected (кроме Призрака), либо вручную через detective_reveal(scope='all').
   creator_revealed_to_all boolean not null default false,
@@ -157,9 +168,10 @@ create table public.proposal_reveals (
 
 -- ----------------------------------------------------------------------------
 -- 1. BEFORE INSERT (не AFTER) — мутирует NEW, чтобы снять снапшот роли автора
---    на proposals.creator_role и отметить кэшбэк-элигибилити Олигарха. Залог
---    больше не списывается здесь вообще — анонимность жалобы держится до
---    отклонения (см. close_proposal_if_complete, секция 3).
+--    на proposals.creator_role. Залог больше не списывается здесь вообще —
+--    анонимность жалобы держится до отклонения (см. close_proposal_if_complete,
+--    секция 3). Олигарх-кэшбэк решается ТАМ ЖЕ, лениво при approved — попытка
+--    (reward_create_count) не должна тратиться на отклонённую награду.
 -- ----------------------------------------------------------------------------
 create function public.handle_new_proposal()
 returns trigger
@@ -170,7 +182,6 @@ as $$
 declare
   v_creator_metadata jsonb;
   v_creator_role     text;
-  v_reward_count     integer;
 begin
   select role_metadata into v_creator_metadata
   from public.trip_members
@@ -178,18 +189,6 @@ begin
 
   v_creator_role := coalesce(v_creator_metadata ->> 'role', 'civilian');
   new.creator_role := v_creator_role;
-
-  if new.type = 'reward' and v_creator_role = 'oligarch' then
-    v_reward_count := coalesce((v_creator_metadata ->> 'reward_create_count')::integer, 0);
-
-    if v_reward_count < 3 then
-      new.oligarch_cashback_eligible := true;
-    end if;
-
-    update public.trip_members
-    set role_metadata = jsonb_set(role_metadata, '{reward_create_count}', to_jsonb(v_reward_count + 1))
-    where trip_id = new.trip_id and user_id = new.creator_id;
-  end if;
 
   return new;
 end;
@@ -207,8 +206,9 @@ create trigger on_proposal_created
 --    зарядом (±20). Списание заряда суперголоса перенесено в
 --    close_proposal_if_complete (секция 3) — если дело всё равно отклонили
 --    большинством, попытка не должна тратить заряд впустую. Вес голоса
---    (weight=2) разрешён только Прокурору с дневным зарядом (3 раза в день в
---    текущей роли — роль и так сгорает каждые сутки).
+--    (weight=2) разрешён только Прокурору с дневным зарядом (double_vote_limit,
+--    снят в role_metadata при розыгрыше роли из настроек поездки — см.
+--    assign_trip_role — роль и так сгорает каждые сутки).
 -- ----------------------------------------------------------------------------
 create function public.validate_vote()
 returns trigger
@@ -221,6 +221,7 @@ declare
   v_voter_metadata jsonb;
   v_voter_role     text;
   v_max_abs        integer := 10;
+  v_double_limit   integer;
 begin
   select trip_id, creator_id, target_id, type, status
   into v_proposal
@@ -262,7 +263,8 @@ begin
     if v_voter_role <> 'prosecutor' then
       raise exception 'Только Прокурор может удвоить вес голоса';
     end if;
-    if coalesce((v_voter_metadata ->> 'double_vote_count')::integer, 0) >= 3 then
+    v_double_limit := coalesce((v_voter_metadata ->> 'double_vote_limit')::integer, 3);
+    if coalesce((v_voter_metadata ->> 'double_vote_count')::integer, 0) >= v_double_limit then
       raise exception 'Лимит удвоений на сегодня исчерпан';
     end if;
     update public.trip_members
@@ -290,9 +292,13 @@ create trigger before_vote_insert
 --    Только один pending proposal на trip_id одновременно (см. индекс
 --    proposals_one_pending_per_trip), так что внутри этого триггера нет
 --    межпроposal-гонки за total_points в рамках одной поездки. Заряд
---    суперголоса Судьи (|score| > 10, см. validate_vote) списывается только
---    в ветке 'approved' — если дело всё равно отклонили большинством,
---    попытка не должна тратить заряд впустую.
+--    суперголоса Судьи (|score| > 10, см. validate_vote) и попытка кэшбэка
+--    Олигарха (reward_create_count) списываются только в ветке 'approved' —
+--    если дело всё равно отклонили большинством, попытка не должна тратить
+--    заряд впустую. Порог approved/rejected считается по СУММЕ weight, а не
+--    по числу голосовавших — удвоенный голос Прокурора должен тянуть вдвое
+--    и здесь, не только в финальном среднем балле ниже (иначе при расколе
+--    50/50 по людям дело могло уйти в rejected, даже выигрывая по баллам).
 -- ----------------------------------------------------------------------------
 create function public.close_proposal_if_complete()
 returns trigger
@@ -304,13 +310,17 @@ declare
   v_proposal       record;
   v_expected_votes integer;
   v_total_votes    integer;
-  v_zero_votes     integer;
+  v_zero_weight    numeric;
+  v_total_weight   numeric;
   v_weighted_avg   numeric;
   v_final_score    integer;
+  v_oligarch       jsonb;
+  v_reward_count   integer;
+  v_reward_limit   integer;
+  v_cashback_pct   numeric;
   v_cashback       integer;
 begin
-  select trip_id, creator_id, target_id, type, status, creator_role,
-         oligarch_cashback_eligible
+  select trip_id, creator_id, target_id, type, status, creator_role
   into v_proposal
   from public.proposals
   where id = new.proposal_id
@@ -333,14 +343,18 @@ begin
     return new;
   end if;
 
-  -- Кворум считается по числу голосов (1 человек = 1 голос) — вес сюда не
-  -- входит, только в средний балл ниже.
-  select count(*) into v_zero_votes
+  -- Кворум выше считается по числу голосов (1 человек = 1 голос). Порог
+  -- approved/rejected ниже — по сумме weight (см. комментарий к секции 3).
+  select coalesce(sum(weight), 0) into v_zero_weight
   from public.votes
   where proposal_id = new.proposal_id and score = 0;
 
-  if v_zero_votes * 2 >= v_total_votes then
-    -- большинство (>=50%) отклонило предложение
+  select coalesce(sum(weight), 0) into v_total_weight
+  from public.votes
+  where proposal_id = new.proposal_id;
+
+  if v_zero_weight * 2 >= v_total_weight then
+    -- большинство (>=50% по весу) отклонило предложение
     update public.proposals set status = 'rejected' where id = new.proposal_id;
 
     -- Штраф списывается ТОЛЬКО сейчас (не при создании) и автор раскрывается
@@ -352,8 +366,8 @@ begin
       where trip_id = v_proposal.trip_id and user_id = v_proposal.creator_id;
     end if;
   else
-    -- большинство (>50%) согласилось с предложением — взвешенное среднее
-    -- (вес 2 у удвоенного голоса Прокурора, иначе вес 1 у всех)
+    -- большинство (>50% по весу) согласилось с предложением — взвешенное
+    -- среднее (вес 2 у удвоенного голоса Прокурора, иначе вес 1 у всех)
     select sum(score * weight)::numeric / sum(weight) into v_weighted_avg
     from public.votes
     where proposal_id = new.proposal_id and score <> 0;
@@ -364,12 +378,28 @@ begin
     set total_points = total_points + v_final_score
     where trip_id = v_proposal.trip_id and user_id = v_proposal.target_id;
 
-    -- Кэшбэк Олигарха: только для одобренной награды, только если снапшот
-    -- при создании (handle_new_proposal) отметил её как одну из первых 3.
-    if v_proposal.type = 'reward' and v_proposal.oligarch_cashback_eligible then
-      v_cashback := ceil(v_final_score * 0.25);
+    -- Кэшбэк Олигарха: % и лимит наград настраиваются админом per-trip,
+    -- снапшот лежит в role_metadata (см. assign_trip_role). Попытка
+    -- (reward_create_count) тратится только сейчас, при реальном approved.
+    if v_proposal.type = 'reward' and v_proposal.creator_role = 'oligarch' then
+      select role_metadata into v_oligarch
+      from public.trip_members
+      where trip_id = v_proposal.trip_id and user_id = v_proposal.creator_id
+      for update;
+
+      v_reward_count := coalesce((v_oligarch ->> 'reward_create_count')::integer, 0);
+      v_reward_limit := coalesce((v_oligarch ->> 'reward_limit')::integer, 3);
+      v_cashback_pct := coalesce((v_oligarch ->> 'cashback_pct')::numeric, 25);
+
+      if v_reward_count < v_reward_limit then
+        v_cashback := ceil(v_final_score * v_cashback_pct / 100);
+        update public.trip_members
+        set total_points = total_points + v_cashback
+        where trip_id = v_proposal.trip_id and user_id = v_proposal.creator_id;
+      end if;
+
       update public.trip_members
-      set total_points = total_points + v_cashback
+      set role_metadata = jsonb_set(role_metadata, '{reward_create_count}', to_jsonb(v_reward_count + 1))
       where trip_id = v_proposal.trip_id and user_id = v_proposal.creator_id;
     end if;
 
@@ -457,7 +487,14 @@ create trigger on_trip_status_change
 --    в пределах одного дня (role_metadata.assigned_at = сегодня -> возврат
 --    как есть), p_force_reassign=true (только dev-панель) обходит это.
 --    pg_advisory_xact_lock защищает от двух одновременных спинов в одном
---    трипе, забирающих одну и ту же роль; unique-индекс — backstop.
+--    трипе, забирающих одну и ту же роль; unique-индекс — backstop. Перед
+--    подсчётом занятых ролей чужие протухшие (assigned_at не сегодня)
+--    спецроли сбрасываются на civilian — иначе участник, который ещё не
+--    заходил сегодня, продолжал бы блокировать свою вчерашнюю роль для
+--    всех остальных. Дневные лимиты Прокурора/Детектива и %/лимит Олигарха
+--    настроены админом per-trip в trips.settings — снимаем снапшот в
+--    role_metadata здесь, чтобы фронтенду не нужен был отдельный фетч
+--    trips.settings для отображения "осталось X/лимит".
 -- ----------------------------------------------------------------------------
 create function public.assign_trip_role(
   p_trip_id uuid,
@@ -478,6 +515,11 @@ declare
   v_existing      jsonb;
   v_metadata      jsonb;
   v_today         text := current_date::text;
+  v_settings      jsonb;
+  v_prosecutor_charges integer;
+  v_detective_charges  integer;
+  v_oligarch_pct       numeric;
+  v_oligarch_limit     integer;
 begin
   perform pg_advisory_xact_lock(hashtext(p_trip_id::text));
 
@@ -496,6 +538,19 @@ begin
      and (v_existing ->> 'assigned_at') = v_today then
     return v_existing;
   end if;
+
+  -- Lazy global expiry: чужая роль со вчера (или раньше), которую владелец
+  -- ещё не переразыграл сегодня сам, не должна блокировать пул для
+  -- остальных — сбрасываем её на civilian, не трогая assigned_at, чтобы при
+  -- собственном визите этот участник всё равно увидел колесо, а не "роль
+  -- уже разыграна сегодня".
+  update public.trip_members
+  set role_metadata = jsonb_build_object('role', 'civilian', 'assigned_at', role_metadata ->> 'assigned_at')
+  where trip_id = p_trip_id
+    and user_id <> p_user_id
+    and (role_metadata ->> 'role') is not null
+    and (role_metadata ->> 'role') <> 'civilian'
+    and (role_metadata ->> 'assigned_at') is distinct from v_today;
 
   -- Собственная (возможно устаревшая) роль не должна блокировать сама себя
   -- при реролле — исключаем себя из списка "занятых".
@@ -528,12 +583,27 @@ begin
     end if;
   end if;
 
+  -- Настраиваемые админом при создании поездки заряды (trips.settings);
+  -- отсутствующий ключ = старое хардкодное значение.
+  select settings into v_settings from public.trips where id = p_trip_id;
+  v_prosecutor_charges := coalesce((v_settings ->> 'prosecutor_daily_charges')::integer, 3);
+  v_detective_charges  := coalesce((v_settings ->> 'detective_daily_charges')::integer, 2);
+  v_oligarch_pct        := coalesce((v_settings ->> 'oligarch_cashback_pct')::numeric, 25);
+  v_oligarch_limit      := coalesce((v_settings ->> 'oligarch_reward_limit')::integer, 3);
+
   v_metadata := case v_chosen_role
-    when 'prosecutor' then jsonb_build_object('role', 'prosecutor', 'double_vote_count', 0)
+    when 'prosecutor' then jsonb_build_object(
+      'role', 'prosecutor', 'double_vote_count', 0, 'double_vote_limit', v_prosecutor_charges
+    )
     when 'judge'       then jsonb_build_object('role', 'judge', 'super_verdict_remaining', 2)
     when 'ghost'        then jsonb_build_object('role', 'ghost')
-    when 'oligarch'     then jsonb_build_object('role', 'oligarch', 'reward_create_count', 0)
-    when 'detective'    then jsonb_build_object('role', 'detective', 'reveals_remaining', 2)
+    when 'oligarch'     then jsonb_build_object(
+      'role', 'oligarch', 'reward_create_count', 0,
+      'reward_limit', v_oligarch_limit, 'cashback_pct', v_oligarch_pct
+    )
+    when 'detective'    then jsonb_build_object(
+      'role', 'detective', 'reveals_remaining', v_detective_charges, 'reveals_limit', v_detective_charges
+    )
     else jsonb_build_object('role', 'civilian')
   end;
   v_metadata := v_metadata || jsonb_build_object('assigned_at', v_today);

@@ -9,8 +9,10 @@ function toMember(row) {
   if (!row.profiles) return null
   return {
     id: row.profiles.id,
-    username: row.profiles.username,
-    avatar_url: row.profiles.avatar_url,
+    // trip_members.nickname/avatar_url is an optional per-trip override of
+    // the official profile name — falls back to the profile when unset.
+    username: row.nickname ?? row.profiles.username,
+    avatar_url: row.avatar_url ?? row.profiles.avatar_url,
     total_points: row.total_points,
   }
 }
@@ -27,7 +29,7 @@ export function useTripMembers(tripId) {
       setLoading(true)
       const { data, error: fetchError } = await supabase
         .from('trip_members')
-        .select('total_points, profiles(id, username, avatar_url)')
+        .select('total_points, nickname, avatar_url, profiles(id, username, avatar_url)')
         .eq('trip_id', tripId)
 
       if (cancelled) return
@@ -91,7 +93,15 @@ export function useTripMembers(tripId) {
           if (!data) return
           setMembers((prev) => {
             if (prev.some((m) => m.id === data.id)) return prev
-            return sortByPoints([...prev, { ...data, total_points: payload.new.total_points }])
+            return sortByPoints([
+              ...prev,
+              {
+                id: data.id,
+                username: payload.new.nickname ?? data.username,
+                avatar_url: payload.new.avatar_url ?? data.avatar_url,
+                total_points: payload.new.total_points,
+              },
+            ])
           })
         }
       )

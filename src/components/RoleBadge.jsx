@@ -4,13 +4,21 @@ import { ROLES } from '../lib/roles'
 function chargesLabel(roleMetadata) {
   const role = roleMetadata?.role
   if (role === 'prosecutor') {
-    return `Удвоений сегодня: ${3 - (roleMetadata.double_vote_count ?? 0)}/3`
+    const limit = roleMetadata.double_vote_limit ?? 3
+    return `Удвоений сегодня: ${limit - (roleMetadata.double_vote_count ?? 0)}/${limit}`
   }
   if (role === 'judge') {
     return `Суперсилы: ${roleMetadata.super_verdict_remaining ?? 0}/2`
   }
   if (role === 'detective') {
-    return `Разоблачений: ${roleMetadata.reveals_remaining ?? 0}/2`
+    const limit = roleMetadata.reveals_limit ?? 2
+    return `Разоблачений: ${roleMetadata.reveals_remaining ?? 0}/${limit}`
+  }
+  if (role === 'oligarch') {
+    const limit = roleMetadata.reward_limit ?? 3
+    const pct = roleMetadata.cashback_pct ?? 25
+    const used = Math.min(roleMetadata.reward_create_count ?? 0, limit)
+    return `Кэшбэк ${pct}%: ${used}/${limit} наград использовано`
   }
   return null
 }
