@@ -7,7 +7,7 @@ async function loadHistory(tripId) {
   const { data, error } = await supabase
     .from('proposals')
     .select(
-      `id, type, status, final_score, description, created_at, creator_id, target_id,
+      `id, type, docket_number, status, final_score, description, created_at, creator_id, target_id,
        creator_role, creator_revealed_to_all,
        creator:profiles!proposals_creator_id_fkey(username),
        target:profiles!proposals_target_id_fkey(username),
@@ -145,9 +145,10 @@ export default function ProposalHistory({ tripId, userId, roleMetadata, members 
             const visible = isCreatorVisible(proposal, selfRevealedIds)
             const selfRevealedByMe = selfRevealedIds.has(proposal.id)
             const isEligibleFine = proposal.type === 'fine' && proposal.status === 'approved'
-            const canRevealSelf = isDetective && isEligibleFine && revealsRemaining > 0 && !visible
+            const isOwnProposal = proposal.creator_id === userId
+            const canRevealSelf = isDetective && isEligibleFine && revealsRemaining > 0 && !visible && !isOwnProposal
             const canRevealAll =
-              isDetective && isEligibleFine && selfRevealedByMe && !proposal.creator_revealed_to_all
+              isDetective && isEligibleFine && selfRevealedByMe && !proposal.creator_revealed_to_all && !isOwnProposal
 
             return (
               <HistoryCard

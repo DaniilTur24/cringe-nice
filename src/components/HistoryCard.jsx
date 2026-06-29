@@ -1,14 +1,14 @@
 import { useState } from 'react'
 import Button from './Button'
 
-const TYPE_LABEL = {
-  fine: 'Жалоба',
-  reward: 'Награда',
-}
-
 const STATUS_LABEL = {
   approved: 'Одобрено',
   rejected: 'Отклонено',
+}
+
+function docketTitle(proposal) {
+  const number = proposal.docket_number ?? '?'
+  return proposal.type === 'fine' ? `Уголовное дело №${number}` : `Акт святости №${number}`
 }
 
 const dateFormatter = new Intl.DateTimeFormat('ru-RU', {
@@ -46,7 +46,7 @@ export default function HistoryCard({ proposal, creatorName, canRevealSelf, canR
     <div className="case-card pl-5">
       <div className="flex items-start justify-between gap-3">
         <span className="case-meta mt-0.5">
-          {TYPE_LABEL[proposal.type]} · {STATUS_LABEL[proposal.status]}
+          {docketTitle(proposal)} · {STATUS_LABEL[proposal.status]}
         </span>
         <span className={`score-chip shrink-0 ${scoreClass}`}>
           {score > 0 ? `+${score}` : score}

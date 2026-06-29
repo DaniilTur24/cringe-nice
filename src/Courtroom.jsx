@@ -18,7 +18,7 @@ async function loadProposalDetails(proposalId) {
   const { data, error } = await supabase
     .from('proposals')
     .select(
-      `id, trip_id, creator_id, target_id, type, description, status, final_score, created_at,
+      `id, trip_id, creator_id, target_id, type, docket_number, description, status, final_score, created_at,
        creator_role, creator_revealed_to_all,
        creator:profiles!proposals_creator_id_fkey(username),
        target:profiles!proposals_target_id_fkey(username)`
@@ -37,12 +37,13 @@ async function loadProposalDetails(proposalId) {
 
 function buildVerdictMessage(proposal, status, finalScore, judgeOverrideScore) {
   const isGhostFine = proposal.type === 'fine' && proposal.creator_role === 'ghost'
+  const docketTitle = proposalDocketTitle(proposal)
 
   if (status === 'approved') {
     const points = finalScore ?? 0
     let message = proposal.type === 'fine'
-      ? `Иск одобрен! ${proposal.targetName} получает ${points} баллов.`
-      : `Награда одобрена! ${proposal.targetName} получает ${points} баллов.`
+      ? `${docketTitle} одобрено! ${proposal.targetName} получает ${points} баллов.`
+      : `${docketTitle} одобрен! ${proposal.targetName} получает ${points} баллов.`
     if (isGhostFine) {
       message += ' Автор — Призрак, эта жалоба не попадёт в архив дел.'
     }
@@ -53,11 +54,11 @@ function buildVerdictMessage(proposal, status, finalScore, judgeOverrideScore) {
   }
   if (isGhostFine) {
     // Призрак ни штрафа не платит, ни раскрытия не получает — даже в попапе.
-    return `Иск отклонён. ${proposal.targetName} оправдан(а)! Автор — Призрак: имя не раскрывается, баллы не списываются.`
+    return `${docketTitle} отклонено. ${proposal.targetName} оправдан(а)! Автор — Призрак: имя не раскрывается, баллы не списываются.`
   }
   return proposal.type === 'fine'
-    ? `Иск отклонён. ${proposal.targetName} оправдан(а)! У ябеды ${proposal.creatorName} забрали 1 балл.`
-    : `Награда отклонена.`
+    ? `${docketTitle} отклонено. ${proposal.targetName} оправдан(а)! У ябеды ${proposal.creatorName} забрали 1 балл.`
+    : `${docketTitle} отклонён.`
 }
 
 async function loadJudgeOverrideScore(proposalId) {
@@ -72,15 +73,129 @@ async function loadJudgeOverrideScore(proposalId) {
   return data?.score ?? null
 }
 
+async function loadResolvedProposalIds(tripId) {
+  const { data, error } = await supabase
+    .from('proposals')
+    .select('id, status, final_score')
+    .eq('trip_id', tripId)
+    .neq('status', 'pending')
+    .order('created_at', { ascending: false })
+    .limit(100)
+
+  if (error) throw error
+  return data ?? []
+}
+
+const MAX_STORED_VERDICT_IDS = 200
+const OLIGARCH_REVEAL_INITIAL_REPLAY_MS = 10 * 60 * 1000
+
+function verdictStorageKey(tripId, userId) {
+  return `courtroom:shown-verdicts:${tripId}:${userId}`
+}
+
+function oligarchRevealStorageKey(tripId, userId) {
+  return `courtroom:shown-oligarch-reveals:${tripId}:${userId}`
+}
+
+function detectiveRevealStorageKey(tripId, userId) {
+  return `courtroom:shown-detective-reveals:${tripId}:${userId}`
+}
+
+function readStoredIds(storageKey) {
+  try {
+    const raw = window.localStorage.getItem(storageKey)
+    if (!raw) return { exists: false, ids: new Set() }
+    const ids = JSON.parse(raw)
+    if (!Array.isArray(ids)) return { exists: false, ids: new Set() }
+    return { exists: true, ids: new Set(ids.filter((id) => typeof id === 'string')) }
+  } catch {
+    return { exists: false, ids: new Set() }
+  }
+}
+
+function writeStoredIds(storageKey, ids) {
+  try {
+    window.localStorage.setItem(storageKey, JSON.stringify([...ids].slice(-MAX_STORED_VERDICT_IDS)))
+  } catch {
+    // A blocked localStorage should not break the game flow.
+  }
+}
+
+function readStoredVerdictIds(tripId, userId) {
+  return readStoredIds(verdictStorageKey(tripId, userId))
+}
+
+function writeStoredVerdictIds(tripId, userId, ids) {
+  writeStoredIds(verdictStorageKey(tripId, userId), ids)
+}
+
+function readStoredOligarchRevealIds(tripId, userId) {
+  return readStoredIds(oligarchRevealStorageKey(tripId, userId))
+}
+
+function writeStoredOligarchRevealIds(tripId, userId, ids) {
+  writeStoredIds(oligarchRevealStorageKey(tripId, userId), ids)
+}
+
+function readStoredDetectiveRevealIds(tripId, userId) {
+  return readStoredIds(detectiveRevealStorageKey(tripId, userId))
+}
+
+function writeStoredDetectiveRevealIds(tripId, userId, ids) {
+  writeStoredIds(detectiveRevealStorageKey(tripId, userId), ids)
+}
+
+async function loadOligarchReveals(tripId) {
+  const { data, error } = await supabase
+    .from('oligarch_reveals')
+    .select('id, user_id, amount, revealed_at')
+    .eq('trip_id', tripId)
+    .order('revealed_at', { ascending: false })
+    .limit(100)
+
+  if (error) throw error
+  return data ?? []
+}
+
+async function loadPublicDetectiveReveals(tripId) {
+  const { data, error } = await supabase
+    .from('proposals')
+    .select(
+      `id, trip_id, creator_id, target_id, type, docket_number, description, status, final_score, created_at,
+       creator_role, creator_revealed_to_all,
+       creator:profiles!proposals_creator_id_fkey(username),
+       target:profiles!proposals_target_id_fkey(username)`
+    )
+    .eq('trip_id', tripId)
+    .eq('type', 'fine')
+    .eq('creator_revealed_to_all', true)
+    .order('created_at', { ascending: false })
+    .limit(100)
+
+  if (error) throw error
+
+  return (data ?? []).map((row) => ({
+    ...row,
+    creatorName: row.creator?.username ?? 'Неизвестный',
+    targetName: row.target?.username ?? 'Неизвестный',
+  }))
+}
+
 function proposalCardContent(proposal) {
+  const docketTitle = proposalDocketTitle(proposal)
   return {
     type: proposal.type,
     description: proposal.description,
     title:
       proposal.type === 'fine'
-        ? `Жалоба на ${proposal.targetName}`
-        : `Награда для ${proposal.targetName}`,
+        ? `${docketTitle}: жалоба на ${proposal.targetName}`
+        : `${docketTitle}: награда для ${proposal.targetName}`,
   }
+}
+
+function proposalDocketTitle(proposal) {
+  const number = proposal.docket_number ?? '?'
+  return proposal.type === 'fine' ? `Уголовное дело №${number}` : `Акт святости №${number}`
 }
 
 export default function Courtroom({ tripId, userId, tripStatus = 'active', profileMenu, onExit }) {
@@ -94,6 +209,9 @@ export default function Courtroom({ tripId, userId, tripStatus = 'active', profi
   const [dismissedMembersError, setDismissedMembersError] = useState(null)
   const { members, error: membersError } = useTripMembers(tripId)
   const { roleMetadata } = useTripRole(tripId, userId)
+  const hasStoredVerdictStateRef = useRef(false)
+  const hasStoredOligarchRevealStateRef = useRef(false)
+  const hasStoredDetectiveRevealStateRef = useRef(false)
 
   // members carries each member's per-trip nickname already (see
   // useTripMembers) — used to relabel proposal creator/target names so the
@@ -131,9 +249,91 @@ export default function Courtroom({ tripId, userId, tripStatus = 'active', profi
   }
 
   const proposalsRef = useRef([])
+  const shownVerdictIdsRef = useRef(new Set())
+  const shownOligarchRevealIdsRef = useRef(new Set())
+  const shownDetectiveRevealIdsRef = useRef(new Set())
   useEffect(() => {
     proposalsRef.current = proposals
   }, [proposals])
+
+  useEffect(() => {
+    const stored = readStoredVerdictIds(tripId, userId)
+    shownVerdictIdsRef.current = stored.ids
+    hasStoredVerdictStateRef.current = stored.exists
+  }, [tripId, userId])
+
+  useEffect(() => {
+    const stored = readStoredOligarchRevealIds(tripId, userId)
+    shownOligarchRevealIdsRef.current = stored.ids
+    hasStoredOligarchRevealStateRef.current = stored.exists
+  }, [tripId, userId])
+
+  useEffect(() => {
+    const stored = readStoredDetectiveRevealIds(tripId, userId)
+    shownDetectiveRevealIdsRef.current = stored.ids
+    hasStoredDetectiveRevealStateRef.current = stored.exists
+  }, [tripId, userId])
+
+  function markVerdictShown(proposalId) {
+    shownVerdictIdsRef.current.add(proposalId)
+    writeStoredVerdictIds(tripId, userId, shownVerdictIdsRef.current)
+  }
+
+  function markOligarchRevealShown(revealId) {
+    shownOligarchRevealIdsRef.current.add(revealId)
+    writeStoredOligarchRevealIds(tripId, userId, shownOligarchRevealIdsRef.current)
+  }
+
+  function markDetectiveRevealShown(proposalId) {
+    shownDetectiveRevealIdsRef.current.add(proposalId)
+    writeStoredDetectiveRevealIds(tripId, userId, shownDetectiveRevealIdsRef.current)
+  }
+
+  async function queueVerdict(proposal, status, finalScore) {
+    const judgeOverrideScore =
+      status === 'approved' ? await loadJudgeOverrideScore(proposal.id).catch(() => null) : null
+
+    setVerdictQueue((prev) => [
+      ...prev,
+      {
+        message: buildVerdictMessage(
+          withTripNames(proposal, membersByIdRef.current),
+          status,
+          finalScore,
+          judgeOverrideScore
+        ),
+      },
+    ])
+  }
+
+  async function queueOligarchReveal(reveal) {
+    let username = membersByIdRef.current.get(reveal.user_id)?.username
+    if (!username) {
+      const { data } = await supabase
+        .from('profiles')
+        .select('username')
+        .eq('id', reveal.user_id)
+        .maybeSingle()
+      username = data?.username ?? 'Неизвестный'
+    }
+
+    setVerdictQueue((prev) => [
+      ...prev,
+      {
+        message: `${username} получил(а) ${reveal.amount} баллов, потому что был(а) Олигархом и его/её награды принимали.`,
+      },
+    ])
+  }
+
+  function queueDetectiveReveal(proposal) {
+    const named = withTripNames(proposal, membersByIdRef.current)
+    setVerdictQueue((prev) => [
+      ...prev,
+      {
+        message: `Детектив раскрыл автора: ${proposalDocketTitle(named)} на ${named.targetName} — это ${named.creatorName}!`,
+      },
+    ])
+  }
 
   // Initial load: every pending proposal for this trip, plus which of them
   // the current user already voted on.
@@ -180,6 +380,134 @@ export default function Courtroom({ tripId, userId, tripStatus = 'active', profi
     }
   }, [tripId, userId])
 
+  // If the tab was closed or the user stayed away for a while, realtime
+  // events are gone. On return, replay resolved cases that have not already
+  // produced a verdict popup in this browser.
+  useEffect(() => {
+    let cancelled = false
+
+    async function replayMissedVerdicts() {
+      try {
+        const resolved = await loadResolvedProposalIds(tripId)
+        if (cancelled) return
+
+        if (!hasStoredVerdictStateRef.current) {
+          const baselineIds = new Set(resolved.map((proposal) => proposal.id))
+          shownVerdictIdsRef.current = baselineIds
+          hasStoredVerdictStateRef.current = true
+          writeStoredVerdictIds(tripId, userId, baselineIds)
+          return
+        }
+
+        const missed = resolved
+          .filter((proposal) => !shownVerdictIdsRef.current.has(proposal.id))
+          .reverse()
+
+        for (const proposal of missed) {
+          if (cancelled) return
+          const details = await loadProposalDetails(proposal.id)
+          if (cancelled) return
+          await queueVerdict(details, proposal.status, proposal.final_score)
+          markVerdictShown(proposal.id)
+        }
+      } catch (err) {
+        if (!cancelled) setToast({ type: 'error', message: err.message })
+      }
+    }
+
+    replayMissedVerdicts()
+    return () => {
+      cancelled = true
+    }
+    // queueVerdict/markVerdictShown read refs and current trip/user values.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tripId, userId])
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function replayMissedOligarchReveals() {
+      try {
+        const reveals = await loadOligarchReveals(tripId)
+        if (cancelled) return
+
+        if (!hasStoredOligarchRevealStateRef.current) {
+          const now = Date.now()
+          const recent = reveals.filter(
+            (reveal) => now - new Date(reveal.revealed_at).getTime() <= OLIGARCH_REVEAL_INITIAL_REPLAY_MS
+          )
+          const baselineIds = new Set(reveals.map((reveal) => reveal.id))
+          shownOligarchRevealIdsRef.current = baselineIds
+          hasStoredOligarchRevealStateRef.current = true
+          writeStoredOligarchRevealIds(tripId, userId, baselineIds)
+
+          for (const reveal of [...recent].reverse()) {
+            if (cancelled) return
+            await queueOligarchReveal(reveal)
+          }
+          return
+        }
+
+        const missed = reveals
+          .filter((reveal) => !shownOligarchRevealIdsRef.current.has(reveal.id))
+          .reverse()
+
+        for (const reveal of missed) {
+          if (cancelled) return
+          await queueOligarchReveal(reveal)
+          markOligarchRevealShown(reveal.id)
+        }
+      } catch (err) {
+        if (!cancelled) setToast({ type: 'error', message: err.message })
+      }
+    }
+
+    replayMissedOligarchReveals()
+    return () => {
+      cancelled = true
+    }
+    // queueOligarchReveal/markOligarchRevealShown read refs and current trip/user values.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tripId, userId])
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function replayMissedDetectiveReveals() {
+      try {
+        const reveals = await loadPublicDetectiveReveals(tripId)
+        if (cancelled) return
+
+        if (!hasStoredDetectiveRevealStateRef.current) {
+          const baselineIds = new Set(reveals.map((proposal) => proposal.id))
+          shownDetectiveRevealIdsRef.current = baselineIds
+          hasStoredDetectiveRevealStateRef.current = true
+          writeStoredDetectiveRevealIds(tripId, userId, baselineIds)
+          return
+        }
+
+        const missed = reveals
+          .filter((proposal) => !shownDetectiveRevealIdsRef.current.has(proposal.id))
+          .reverse()
+
+        for (const proposal of missed) {
+          if (cancelled) return
+          queueDetectiveReveal(proposal)
+          markDetectiveRevealShown(proposal.id)
+        }
+      } catch (err) {
+        if (!cancelled) setToast({ type: 'error', message: err.message })
+      }
+    }
+
+    replayMissedDetectiveReveals()
+    return () => {
+      cancelled = true
+    }
+    // queueDetectiveReveal/markDetectiveRevealShown read refs and current trip/user values.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tripId, userId])
+
   // Realtime: new proposals are appended for everyone; status flips to
   // approved/rejected (done by the DB trigger once voting closes) drop that
   // proposal from the list and queue its verdict.
@@ -212,50 +540,36 @@ export default function Courtroom({ tripId, userId, tripStatus = 'active', profi
           table: 'proposals',
           filter: `trip_id=eq.${tripId}`,
         },
-        (payload) => {
+        async (payload) => {
           // Детектив раскрыл автора "всем" — это отдельное от смены статуса
           // обновление строки (флаг creator_revealed_to_all меняется только
           // один раз в жизни предложения), так что проверяем его независимо
           // от ветки с вердиктом ниже.
-          if (payload.new.creator_revealed_to_all) {
+          if (payload.new.creator_revealed_to_all && !shownDetectiveRevealIdsRef.current.has(payload.new.id)) {
+            markDetectiveRevealShown(payload.new.id)
             loadProposalDetails(payload.new.id)
-              .then((details) => {
-                const named = withTripNames(details, membersByIdRef.current)
-                setVerdictQueue((prev) => [
-                  ...prev,
-                  {
-                    message: `Детектив раскрыл автора жалобы на ${named.targetName} — это ${named.creatorName}!`,
-                  },
-                ])
+              .then((details) => queueDetectiveReveal(details))
+              .catch((err) => {
+                shownDetectiveRevealIdsRef.current.delete(payload.new.id)
+                writeStoredDetectiveRevealIds(tripId, userId, shownDetectiveRevealIdsRef.current)
+                setToast({ type: 'error', message: err.message })
               })
-              .catch(() => {})
           }
 
           if (payload.new.status === 'pending') return
-          const current = proposalsRef.current.find((p) => p.id === payload.new.id)
-          if (!current) return
+          if (shownVerdictIdsRef.current.has(payload.new.id)) return
+          markVerdictShown(payload.new.id)
 
-          // Заряд Судьи бьёт по итоговому баллу только если дело одобрено —
-          // при отклонении его экстремальный голос ни на что не повлиял, и
-          // упоминать "превышение полномочий" в этом случае не за что.
-          const overridePromise =
-            payload.new.status === 'approved'
-              ? loadJudgeOverrideScore(payload.new.id).catch(() => null)
-              : Promise.resolve(null)
-
-          overridePromise.then((judgeOverrideScore) => {
-            setVerdictQueue((prev) => [
-              ...prev,
-              {
-                message: buildVerdictMessage(
-                  withTripNames(current, membersByIdRef.current),
-                  payload.new.status,
-                  payload.new.final_score,
-                  judgeOverrideScore
-                ),
-              },
-            ])
-          })
+          try {
+            const current =
+              proposalsRef.current.find((p) => p.id === payload.new.id) ??
+              (await loadProposalDetails(payload.new.id))
+            await queueVerdict(current, payload.new.status, payload.new.final_score)
+          } catch (err) {
+            shownVerdictIdsRef.current.delete(payload.new.id)
+            writeStoredVerdictIds(tripId, userId, shownVerdictIdsRef.current)
+            setToast({ type: 'error', message: err.message })
+          }
           setProposals((prev) => prev.filter((p) => p.id !== payload.new.id))
         }
       )
@@ -286,21 +600,15 @@ export default function Courtroom({ tripId, userId, tripStatus = 'active', profi
           filter: `trip_id=eq.${tripId}`,
         },
         async (payload) => {
-          let username = membersByIdRef.current.get(payload.new.user_id)?.username
-          if (!username) {
-            const { data } = await supabase
-              .from('profiles')
-              .select('username')
-              .eq('id', payload.new.user_id)
-              .maybeSingle()
-            username = data?.username ?? 'Неизвестный'
+          if (shownOligarchRevealIdsRef.current.has(payload.new.id)) return
+          markOligarchRevealShown(payload.new.id)
+          try {
+            await queueOligarchReveal(payload.new)
+          } catch (err) {
+            shownOligarchRevealIdsRef.current.delete(payload.new.id)
+            writeStoredOligarchRevealIds(tripId, userId, shownOligarchRevealIdsRef.current)
+            setToast({ type: 'error', message: err.message })
           }
-          setVerdictQueue((prev) => [
-            ...prev,
-            {
-              message: `${username} был Олигархом и тайно копил кэшбэк — теперь ${payload.new.amount} баллов добавлены в общий счёт!`,
-            },
-          ])
         }
       )
       .subscribe()
@@ -308,6 +616,8 @@ export default function Courtroom({ tripId, userId, tripStatus = 'active', profi
     return () => {
       supabase.removeChannel(channel)
     }
+    // queueOligarchReveal/markOligarchRevealShown read refs and current trip/user values.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tripId])
 
   async function handleSubmitVote(proposalId, score, weight = 1) {
@@ -396,7 +706,8 @@ export default function Courtroom({ tripId, userId, tripStatus = 'active', profi
               return (
                 <Card key={proposal.id} className="text-center">
                   <span className="panel-label">Vote locked</span>
-                  <p className="mt-4 text-xl font-black">Ты уже проголосовал.</p>
+                  <h2 className="mt-4 text-2xl font-black leading-tight">{proposalForCard.title}</h2>
+                  <p className="mt-3 text-xl font-black">Ты уже проголосовал.</p>
                   <p className="mt-2 text-sm font-bold text-ink/65">Ждем остальных игроков.</p>
                 </Card>
               )
@@ -413,7 +724,7 @@ export default function Courtroom({ tripId, userId, tripStatus = 'active', profi
             )
           })}
 
-        <Leaderboard members={members} currentUserId={userId} />
+        <Leaderboard members={members} currentUserId={userId} roleMetadata={roleMetadata} />
 
         <ProposalHistory tripId={tripId} userId={userId} roleMetadata={roleMetadata} members={members} />
       </div>

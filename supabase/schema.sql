@@ -104,6 +104,7 @@ create table public.proposals (
   creator_id   uuid not null references public.profiles (id) on delete cascade,
   target_id    uuid not null references public.profiles (id) on delete cascade,
   type         text not null check (type in ('fine', 'reward')),
+  docket_number integer not null,
   description  text not null,
   status       text not null default 'pending' check (status in ('pending', 'approved', 'rejected')),
   -- ROUND(AVG(score)) по ненулевым голосам в момент approved; null пока pending/rejected
@@ -121,6 +122,8 @@ create table public.proposals (
 
 create index proposals_trip_id_idx on public.proposals (trip_id);
 create index proposals_status_idx on public.proposals (status);
+create unique index proposals_trip_type_docket_number_key
+  on public.proposals (trip_id, type, docket_number);
 
 -- Не больше одного pending-предложения на поездку одновременно — пока
 -- текущее не решено (approved/rejected), второй иск или награду никому не
@@ -205,6 +208,13 @@ begin
 
   v_creator_role := coalesce(v_creator_metadata ->> 'role', 'civilian');
   new.creator_role := v_creator_role;
+
+  if new.docket_number is null then
+    select coalesce(max(docket_number), 0) + 1
+    into new.docket_number
+    from public.proposals
+    where trip_id = new.trip_id and type = new.type;
+  end if;
 
   return new;
 end;
@@ -710,7 +720,7 @@ begin
     raise exception 'Некорректный scope разоблачения: %', p_scope;
   end if;
 
-  select trip_id, type, status, creator_role, creator_revealed_to_all
+  select trip_id, creator_id, type, status, creator_role, creator_revealed_to_all
   into v_proposal
   from public.proposals
   where id = p_proposal_id
@@ -718,6 +728,9 @@ begin
 
   if v_proposal is null then
     raise exception 'Предложение не найдено';
+  end if;
+  if v_proposal.creator_id = auth.uid() then
+    raise exception 'Нельзя разоблачить автора своей жалобы';
   end if;
   if v_proposal.status = 'pending' then
     raise exception 'Нельзя разоблачить автора пока дело не закрыто';

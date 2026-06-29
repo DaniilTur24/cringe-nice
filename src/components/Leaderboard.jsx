@@ -2,12 +2,13 @@ import { motion } from 'framer-motion'
 import Card from './Card'
 import { avatarLabel } from '../lib/avatars'
 
-export default function Leaderboard({ members, currentUserId }) {
+export default function Leaderboard({ members, currentUserId, roleMetadata }) {
   if (members.length === 0) return null
 
   // Sorts defensively rather than trusting callers to pass pre-sorted data —
   // crown/fire placement silently breaks otherwise.
   const sorted = [...members].sort((a, b) => b.total_points - a.total_points)
+  const hiddenCashback = roleMetadata?.role === 'oligarch' ? roleMetadata.pending_cashback ?? 0 : 0
 
   return (
     <Card>
@@ -48,8 +49,15 @@ export default function Leaderboard({ members, currentUserId }) {
                   </span>
                 )}
               </span>
-              <span className="points-chip">
-                {member.total_points}
+              <span className="flex items-center gap-2">
+                {member.id === currentUserId && hiddenCashback > 0 && (
+                  <span className="hidden-points-chip">
+                    +{hiddenCashback}
+                  </span>
+                )}
+                <span className="points-chip">
+                  {member.total_points}
+                </span>
               </span>
             </motion.div>
           )

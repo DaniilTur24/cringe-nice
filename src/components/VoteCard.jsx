@@ -85,6 +85,7 @@ export default function VoteCard({ proposal, onSubmit, voterRole, voterRoleMetad
           animate={{ opacity: 1, y: 0 }}
         >
           <Card className="text-center">
+            <h2 className="text-xl font-black leading-tight">{proposal.title}</h2>
             <p className="font-bold">Вердикт отправлен! Ожидаем остальных...</p>
           </Card>
         </motion.div>
