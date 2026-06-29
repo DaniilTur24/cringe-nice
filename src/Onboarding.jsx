@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { supabase } from './lib/supabaseClient'
 import Courtroom from './Courtroom'
@@ -43,6 +43,17 @@ async function isTripMember(tripId, userId) {
   return Boolean(data)
 }
 
+async function fetchTripStatus(tripId) {
+  const { data, error } = await supabase
+    .from('trips')
+    .select('status')
+    .eq('id', tripId)
+    .maybeSingle()
+  if (error) throw error
+  if (!data) throw new Error('Поездка по этой ссылке не найдена.')
+  return data.status
+}
+
 // Роль сгорает каждые сутки (role_metadata.assigned_at) — true значит можно
 // идти прямо в Courtroom, false значит нужно сперва прогнать через рулетку.
 async function hasRoleForToday(tripId, userId) {
@@ -81,15 +92,11 @@ export default function Onboarding() {
   // `uid` передаётся явно (не из стейта userId), потому что routeAuthenticatedUser
   // вызывает setUserId и enterTrip подряд в одной функции — стейт ещё не
   // успел бы обновиться к моменту, когда он понадобится здесь.
-  async function enterTrip(id, uid) {
-    try {
-      const { data, error } = await supabase.from('trips').select('status').eq('id', id).single()
-      if (error) throw error
-      setTripStatus(data.status)
-    } catch {
-      setTripStatus('active')
-    }
+  const enterTrip = useCallback(async (id, uid, knownStatus = null) => {
+    const status = knownStatus ?? (await fetchTripStatus(id))
+    setTripStatus(status)
     setTripId(id)
+    window.history.replaceState(null, '', `?trip_id=${id}`)
 
     const isFresh = await hasRoleForToday(id, uid).catch(() => false)
     if (isFresh) {
@@ -98,31 +105,34 @@ export default function Onboarding() {
       setRolewheelNextStep('ready')
       setStep('role-wheel')
     }
-  }
+  }, [])
 
   // A trip_id in the URL is a deliberate invite link — resolve it straight
   // into that trip (or the join screen). With no trip_id, land on the
   // dashboard instead of guessing "the" trip, since a user can belong to
   // several at once.
-  async function continueAfterAuth(uid, tripIdFromUrl) {
+  const continueAfterAuth = useCallback(async (uid, tripIdFromUrl) => {
     if (tripIdFromUrl) {
+      const status = await fetchTripStatus(tripIdFromUrl)
       if (await isTripMember(tripIdFromUrl, uid)) {
-        await enterTrip(tripIdFromUrl, uid)
+        await enterTrip(tripIdFromUrl, uid, status)
       } else {
         setTripId(tripIdFromUrl)
+        setTripStatus(status)
+        window.history.replaceState(null, '', `?trip_id=${tripIdFromUrl}`)
         setStep('join')
       }
       return
     }
 
     setStep('dashboard')
-  }
+  }, [enterTrip])
 
   // Профиль теперь различается только почтой — никакого отдельного шага
   // "как тебя зовут" при первом входе. username — служебное поле (берём
   // локальную часть почты), реальное имя пользователь вводит каждый раз
   // отдельно при входе/создании конкретной поездки (nickname в trip_members).
-  async function routeAuthenticatedUser(user, tripIdFromUrl) {
+  const routeAuthenticatedUser = useCallback(async (user, tripIdFromUrl) => {
     setUserId(user.id)
     setEmail(user.email ?? '')
 
@@ -140,7 +150,7 @@ export default function Onboarding() {
 
     setProfile(activeProfile)
     await continueAfterAuth(user.id, tripIdFromUrl)
-  }
+  }, [continueAfterAuth])
 
   async function handleGoogleSignIn() {
     try {
@@ -193,7 +203,7 @@ export default function Onboarding() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [routeAuthenticatedUser])
 
   async function handleEmailSubmit(submittedEmail) {
     try {
@@ -272,6 +282,7 @@ export default function Onboarding() {
         )
       if (memberError) throw memberError
 
+      window.history.replaceState(null, '', `?trip_id=${tripId}`)
       setUserId(user.id)
       setRolewheelNextStep('manifest')
       setStep('role-wheel')
@@ -302,7 +313,10 @@ export default function Onboarding() {
         userId={userId}
         tripStatus={tripStatus}
         profileMenu={profileMenu}
-        onExit={() => setStep('dashboard')}
+        onExit={() => {
+          window.history.replaceState(null, '', window.location.pathname)
+          setStep('dashboard')
+        }}
       />
     )
   }

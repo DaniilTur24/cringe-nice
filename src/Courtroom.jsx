@@ -18,7 +18,7 @@ async function loadProposalDetails(proposalId) {
   const { data, error } = await supabase
     .from('proposals')
     .select(
-      `id, trip_id, creator_id, target_id, type, docket_number, description, status, final_score, created_at,
+      `id, trip_id, creator_id, target_id, type, docket_number, description, status, final_score, ai_verdict, created_at,
        creator_role, creator_revealed_to_all,
        creator:profiles!proposals_creator_id_fkey(username),
        target:profiles!proposals_target_id_fkey(username)`
@@ -76,7 +76,7 @@ async function loadJudgeOverrideScore(proposalId) {
 async function loadResolvedProposalIds(tripId) {
   const { data, error } = await supabase
     .from('proposals')
-    .select('id, status, final_score')
+    .select('id, status, final_score, ai_verdict')
     .eq('trip_id', tripId)
     .neq('status', 'pending')
     .order('created_at', { ascending: false })
@@ -161,7 +161,7 @@ async function loadPublicDetectiveReveals(tripId) {
   const { data, error } = await supabase
     .from('proposals')
     .select(
-      `id, trip_id, creator_id, target_id, type, docket_number, description, status, final_score, created_at,
+      `id, trip_id, creator_id, target_id, type, docket_number, description, status, final_score, ai_verdict, created_at,
        creator_role, creator_revealed_to_all,
        creator:profiles!proposals_creator_id_fkey(username),
        target:profiles!proposals_target_id_fkey(username)`
@@ -196,6 +196,13 @@ function proposalCardContent(proposal) {
 function proposalDocketTitle(proposal) {
   const number = proposal.docket_number ?? '?'
   return proposal.type === 'fine' ? `Уголовное дело №${number}` : `Акт святости №${number}`
+}
+
+async function requestAiVerdict(proposalId) {
+  const { error } = await supabase.functions.invoke('generate-verdict', {
+    body: { proposal_id: proposalId },
+  })
+  if (error) throw error
 }
 
 export default function Courtroom({ tripId, userId, tripStatus = 'active', profileMenu, onExit }) {
@@ -296,14 +303,28 @@ export default function Courtroom({ tripId, userId, tripStatus = 'active', profi
     setVerdictQueue((prev) => [
       ...prev,
       {
+        proposalId: proposal.id,
         message: buildVerdictMessage(
           withTripNames(proposal, membersByIdRef.current),
           status,
           finalScore,
           judgeOverrideScore
         ),
+        aiVerdict: proposal.ai_verdict ?? null,
+        aiPending: !proposal.ai_verdict,
       },
     ])
+
+    if (!proposal.ai_verdict) {
+      requestAiVerdict(proposal.id).catch((err) => {
+        console.warn('AI verdict generation failed:', err)
+        setVerdictQueue((prev) =>
+          prev.map((verdict) =>
+            verdict.proposalId === proposal.id ? { ...verdict, aiPending: false } : verdict
+          )
+        )
+      })
+    }
   }
 
   async function queueOligarchReveal(reveal) {
@@ -541,6 +562,16 @@ export default function Courtroom({ tripId, userId, tripStatus = 'active', profi
           filter: `trip_id=eq.${tripId}`,
         },
         async (payload) => {
+          if (payload.new.ai_verdict) {
+            setVerdictQueue((prev) =>
+              prev.map((verdict) =>
+                verdict.proposalId === payload.new.id
+                  ? { ...verdict, aiVerdict: payload.new.ai_verdict, aiPending: false }
+                  : verdict
+              )
+            )
+          }
+
           // Детектив раскрыл автора "всем" — это отдельное от смены статуса
           // обновление строки (флаг creator_revealed_to_all меняется только
           // один раз в жизни предложения), так что проверяем его независимо

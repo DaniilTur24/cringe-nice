@@ -4,6 +4,11 @@ import Card from './Card'
 import HistoryCard from './HistoryCard'
 
 async function loadHistory(tripId) {
+  const baseSelect = `id, type, status, final_score, description, created_at, creator_id, target_id,
+       creator_role, creator_revealed_to_all,
+       creator:profiles!proposals_creator_id_fkey(username),
+       target:profiles!proposals_target_id_fkey(username),
+       votes(score)`
   const { data, error } = await supabase
     .from('proposals')
     .select(
@@ -17,10 +22,25 @@ async function loadHistory(tripId) {
     .neq('status', 'pending')
     .order('created_at', { ascending: false })
 
-  if (error) throw error
+  let rows = data
+  if (error) {
+    const isMissingDocketNumber =
+      error.message?.includes('docket_number') || error.details?.includes('docket_number')
+    if (!isMissingDocketNumber) throw error
+
+    const { data: fallbackData, error: fallbackError } = await supabase
+      .from('proposals')
+      .select(baseSelect)
+      .eq('trip_id', tripId)
+      .neq('status', 'pending')
+      .order('created_at', { ascending: false })
+
+    if (fallbackError) throw fallbackError
+    rows = (fallbackData ?? []).map((row) => ({ ...row, docket_number: null }))
+  }
 
   // Призрак полностью исключен из истории: для него записи как будто не существует.
-  return (data ?? [])
+  return (rows ?? [])
     .filter((row) => !(row.type === 'fine' && row.creator_role === 'ghost'))
     .map((row) => ({
       ...row,
@@ -45,6 +65,7 @@ export default function ProposalHistory({ tripId, userId, roleMetadata, members 
   const [proposals, setProposals] = useState([])
   const [selfRevealedIds, setSelfRevealedIds] = useState(new Set())
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
   const [isExpanded, setIsExpanded] = useState(false)
 
   // members carries each member's per-trip nickname (see useTripMembers) — a
@@ -57,17 +78,21 @@ export default function ProposalHistory({ tripId, userId, roleMetadata, members 
 
   async function reload() {
     try {
-      const [history, { data: reveals }] = await Promise.all([
+      setError(null)
+      const [history, revealsResult] = await Promise.all([
         loadHistory(tripId),
         supabase.from('proposal_reveals').select('proposal_id').eq('viewer_id', userId),
       ])
+      if (revealsResult.error) throw revealsResult.error
       const named = history.map((p) => ({
         ...p,
         creatorName: membersByIdRef.current.get(p.creator_id)?.username ?? p.creatorName,
         targetName: membersByIdRef.current.get(p.target_id)?.username ?? p.targetName,
       }))
       setProposals(named)
-      setSelfRevealedIds(new Set((reveals ?? []).map((r) => r.proposal_id)))
+      setSelfRevealedIds(new Set((revealsResult.data ?? []).map((r) => r.proposal_id)))
+    } catch (err) {
+      setError(err)
     } finally {
       setLoading(false)
     }
@@ -117,7 +142,29 @@ export default function ProposalHistory({ tripId, userId, roleMetadata, members 
     if (!error) await reload()
   }
 
-  if (loading || proposals.length === 0) return null
+  if (loading) return null
+
+  if (error) {
+    return (
+      <Card>
+        <span className="panel-label">Архив</span>
+        <h2 className="mt-3 text-2xl font-black leading-tight">Закрытые дела</h2>
+        <p className="mt-3 rounded-[1rem] border-2 border-juicy-red bg-white/75 p-4 text-sm font-bold text-juicy-red">
+          История дел не загрузилась: {error.message}
+        </p>
+      </Card>
+    )
+  }
+
+  if (proposals.length === 0) {
+    return (
+      <Card>
+        <span className="panel-label">Архив</span>
+        <h2 className="mt-3 text-2xl font-black leading-tight">Закрытые дела</h2>
+        <p className="mt-3 text-sm font-bold text-ink/65">Пока нет закрытых дел.</p>
+      </Card>
+    )
+  }
 
   const isDetective = roleMetadata?.role === 'detective'
   const revealsRemaining = roleMetadata?.reveals_remaining ?? 0

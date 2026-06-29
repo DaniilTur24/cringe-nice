@@ -109,6 +109,8 @@ create table public.proposals (
   status       text not null default 'pending' check (status in ('pending', 'approved', 'rejected')),
   -- ROUND(AVG(score)) по ненулевым голосам в момент approved; null пока pending/rejected
   final_score  integer,
+  -- Атмосферный текст от Edge Function/OpenAI. Не участвует в игровой логике.
+  ai_verdict   text,
   created_at   timestamptz not null default now(),
   -- Снапшот роли автора на момент создания (handle_new_proposal) — нужен,
   -- чтобы знать про Призрака/Олигарха без join по trip_members, который к
@@ -464,7 +466,50 @@ create trigger after_vote_insert
   execute function public.close_proposal_if_complete();
 
 -- ----------------------------------------------------------------------------
--- 4. Защита current_role от прямого изменения пользователем через UPDATE
+-- 4. AI flavor verdict request. Игровая логика от этого не зависит: если URL/ключ
+--    Edge Function не настроены или HTTP-вызов не сработал, обычный вердикт
+--    и история всё равно работают.
+-- ----------------------------------------------------------------------------
+create function public.request_ai_verdict_generation()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_function_url text;
+  v_function_key text;
+begin
+  if old.status = 'pending'
+     and new.status in ('approved', 'rejected')
+     and new.ai_verdict is null then
+    v_function_url := current_setting('app.settings.generate_verdict_url', true);
+    v_function_key := current_setting('app.settings.generate_verdict_key', true);
+
+    if coalesce(v_function_url, '') <> '' and coalesce(v_function_key, '') <> '' then
+      perform net.http_post(
+        url := v_function_url,
+        headers := jsonb_build_object(
+          'Content-Type', 'application/json',
+          'Authorization', 'Bearer ' || v_function_key
+        ),
+        body := jsonb_build_object('proposal_id', new.id)
+      );
+    end if;
+  end if;
+
+  return new;
+end;
+$$;
+
+create trigger on_proposal_ai_verdict_request
+  after update of status on public.proposals
+  for each row
+  when (old.status = 'pending' and new.status in ('approved', 'rejected'))
+  execute function public.request_ai_verdict_generation();
+
+-- ----------------------------------------------------------------------------
+-- 5. Защита current_role от прямого изменения пользователем через UPDATE
 --    profiles (RLS разрешает обновлять свой профиль, но не эту колонку).
 --    total_points больше не живёт на profiles (см. trip_members выше), так
 --    что этому триггеру достаточно следить только за current_role.
@@ -492,7 +537,7 @@ create trigger before_profile_update
   execute function public.lock_protected_profile_fields();
 
 -- ----------------------------------------------------------------------------
--- 5. Завершение/отмена поездки создателем (status: active -> finished или
+-- 6. Завершение/отмена поездки создателем (status: active -> finished или
 --    cancelled) автоматически отклоняет всё, что всё ещё голосуется в ней —
 --    иначе такое предложение осталось бы pending навечно.
 -- ----------------------------------------------------------------------------
@@ -517,7 +562,7 @@ create trigger on_trip_status_change
   execute function public.reject_pending_proposals_on_trip_close();
 
 -- ----------------------------------------------------------------------------
--- 6. assign_trip_role — рулетка + dev-панель + ежедневный реролл. Идемпотентна
+-- 7. assign_trip_role — рулетка + dev-панель + ежедневный реролл. Идемпотентна
 --    в пределах одного дня (role_metadata.assigned_at = сегодня -> возврат
 --    как есть), p_force_reassign=true (только dev-панель) обходит это.
 --    pg_advisory_xact_lock защищает от двух одновременных спинов в одном
