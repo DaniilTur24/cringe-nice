@@ -1,7 +1,7 @@
 import { useState } from 'react'
-import { avatarLabel } from '../lib/avatars'
+import AvatarIcon from './AvatarIcon'
 
-export default function ProfileMenu({ profile, email, onLogout }) {
+export default function ProfileMenu({ profile, email, onLogout, avatar }) {
   const [open, setOpen] = useState(false)
 
   return (
@@ -10,9 +10,9 @@ export default function ProfileMenu({ profile, email, onLogout }) {
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-label="Профиль"
-        className="flex h-11 w-11 items-center justify-center rounded-full border-[3px] border-ink bg-white text-sm font-black text-ink shadow-neo-sm"
+        className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-full border-[3px] border-ink bg-white p-0.5 shadow-neo-sm"
       >
-        {avatarLabel(profile?.avatar_url)}
+        <AvatarIcon value={avatar ?? profile?.avatar_url} className="h-full w-full" />
       </button>
 
       {open && (

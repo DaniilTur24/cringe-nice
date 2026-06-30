@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { supabase } from './lib/supabaseClient'
 import Courtroom from './Courtroom'
@@ -15,8 +15,7 @@ import JoinScreen from './components/onboarding/JoinScreen'
 import ManifestScreen from './components/onboarding/ManifestScreen'
 import RoleWheel from './components/onboarding/RoleWheel'
 import ProfileMenu from './components/ProfileMenu'
-
-const ADMIN_AVATAR = 'ADM'
+import { AVATARS } from './lib/avatars'
 
 function todayISO() {
   return new Date().toISOString().slice(0, 10)
@@ -41,6 +40,28 @@ async function isTripMember(tripId, userId) {
     .maybeSingle()
   if (error) throw error
   return Boolean(data)
+}
+
+async function fetchTripStatus(tripId) {
+  const { data, error } = await supabase
+    .from('trips')
+    .select('status')
+    .eq('id', tripId)
+    .maybeSingle()
+  if (error) throw error
+  if (!data) throw new Error('Поездка по этой ссылке не найдена.')
+  return data.status
+}
+
+async function fetchTripMemberAvatar(tripId, userId) {
+  const { data, error } = await supabase
+    .from('trip_members')
+    .select('avatar_url')
+    .eq('trip_id', tripId)
+    .eq('user_id', userId)
+    .maybeSingle()
+  if (error) throw error
+  return data?.avatar_url ?? null
 }
 
 // Роль сгорает каждые сутки (role_metadata.assigned_at) — true значит можно
@@ -72,6 +93,7 @@ export default function Onboarding() {
   const [email, setEmail] = useState('')
   const [profile, setProfile] = useState(null)
   const [toast, setToast] = useState(null)
+  const [draftAvatar, setDraftAvatar] = useState(AVATARS[0])
   // Куда идти после 'role-wheel' — разное для входа в существующий трип,
   // создания нового и присоединения по ссылке.
   const [rolewheelNextStep, setRolewheelNextStep] = useState('ready')
@@ -81,15 +103,16 @@ export default function Onboarding() {
   // `uid` передаётся явно (не из стейта userId), потому что routeAuthenticatedUser
   // вызывает setUserId и enterTrip подряд в одной функции — стейт ещё не
   // успел бы обновиться к моменту, когда он понадобится здесь.
-  async function enterTrip(id, uid) {
-    try {
-      const { data, error } = await supabase.from('trips').select('status').eq('id', id).single()
-      if (error) throw error
-      setTripStatus(data.status)
-    } catch {
-      setTripStatus('active')
-    }
+  const enterTrip = useCallback(async (id, uid, knownStatus = null) => {
+    const status = knownStatus ?? (await fetchTripStatus(id))
+    setTripStatus(status)
     setTripId(id)
+    window.history.replaceState(null, '', `?trip_id=${id}`)
+    const avatar = await fetchTripMemberAvatar(id, uid).catch(() => null)
+    if (avatar) {
+      setDraftAvatar(avatar)
+      setProfile((current) => current ? { ...current, avatar_url: avatar } : current)
+    }
 
     const isFresh = await hasRoleForToday(id, uid).catch(() => false)
     if (isFresh) {
@@ -98,31 +121,35 @@ export default function Onboarding() {
       setRolewheelNextStep('ready')
       setStep('role-wheel')
     }
-  }
+  }, [])
 
   // A trip_id in the URL is a deliberate invite link — resolve it straight
   // into that trip (or the join screen). With no trip_id, land on the
   // dashboard instead of guessing "the" trip, since a user can belong to
   // several at once.
-  async function continueAfterAuth(uid, tripIdFromUrl) {
+  const continueAfterAuth = useCallback(async (uid, tripIdFromUrl) => {
     if (tripIdFromUrl) {
+      const status = await fetchTripStatus(tripIdFromUrl)
       if (await isTripMember(tripIdFromUrl, uid)) {
-        await enterTrip(tripIdFromUrl, uid)
+        await enterTrip(tripIdFromUrl, uid, status)
       } else {
         setTripId(tripIdFromUrl)
+        setTripStatus(status)
+        setDraftAvatar(AVATARS[0])
+        window.history.replaceState(null, '', `?trip_id=${tripIdFromUrl}`)
         setStep('join')
       }
       return
     }
 
     setStep('dashboard')
-  }
+  }, [enterTrip])
 
   // Профиль теперь различается только почтой — никакого отдельного шага
   // "как тебя зовут" при первом входе. username — служебное поле (берём
   // локальную часть почты), реальное имя пользователь вводит каждый раз
   // отдельно при входе/создании конкретной поездки (nickname в trip_members).
-  async function routeAuthenticatedUser(user, tripIdFromUrl) {
+  const routeAuthenticatedUser = useCallback(async (user, tripIdFromUrl) => {
     setUserId(user.id)
     setEmail(user.email ?? '')
 
@@ -140,7 +167,7 @@ export default function Onboarding() {
 
     setProfile(activeProfile)
     await continueAfterAuth(user.id, tripIdFromUrl)
-  }
+  }, [continueAfterAuth])
 
   async function handleGoogleSignIn() {
     try {
@@ -160,6 +187,7 @@ export default function Onboarding() {
     setProfile(null)
     setEmail('')
     setTripId(null)
+    setDraftAvatar(AVATARS[0])
     window.history.replaceState(null, '', window.location.pathname)
     setStep('email')
   }
@@ -193,7 +221,7 @@ export default function Onboarding() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [routeAuthenticatedUser])
 
   async function handleEmailSubmit(submittedEmail) {
     try {
@@ -227,7 +255,7 @@ export default function Onboarding() {
     }
   }
 
-  async function handleCreateTrip(tripName, adminName, roleSettings) {
+  async function handleCreateTrip(tripName, adminName, adminAvatar, roleSettings) {
     try {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) throw new Error('Сессия истекла, войди заново.')
@@ -244,7 +272,7 @@ export default function Onboarding() {
       const { error: memberError } = await supabase
         .from('trip_members')
         .upsert(
-          [{ trip_id: trip.id, user_id: user.id, nickname: adminName, avatar_url: ADMIN_AVATAR }],
+          [{ trip_id: trip.id, user_id: user.id, nickname: adminName, avatar_url: adminAvatar }],
           { onConflict: 'trip_id,user_id' }
         )
       if (memberError) throw memberError
@@ -252,6 +280,8 @@ export default function Onboarding() {
       window.history.replaceState(null, '', `?trip_id=${trip.id}`)
       setTripId(trip.id)
       setUserId(user.id)
+      setDraftAvatar(adminAvatar)
+      setProfile((current) => current ? { ...current, avatar_url: adminAvatar } : current)
       setRolewheelNextStep('invite-link')
       setStep('role-wheel')
     } catch (err) {
@@ -272,7 +302,10 @@ export default function Onboarding() {
         )
       if (memberError) throw memberError
 
+      window.history.replaceState(null, '', `?trip_id=${tripId}`)
       setUserId(user.id)
+      setDraftAvatar(avatar)
+      setProfile((current) => current ? { ...current, avatar_url: avatar } : current)
       setRolewheelNextStep('manifest')
       setStep('role-wheel')
     } catch (err) {
@@ -281,7 +314,7 @@ export default function Onboarding() {
   }
 
   const profileMenu = profile ? (
-    <ProfileMenu profile={profile} email={email} onLogout={handleLogout} />
+    <ProfileMenu profile={profile} email={email} onLogout={handleLogout} avatar={draftAvatar ?? profile.avatar_url} />
   ) : null
 
   if (step === 'dashboard') {
@@ -302,7 +335,10 @@ export default function Onboarding() {
         userId={userId}
         tripStatus={tripStatus}
         profileMenu={profileMenu}
-        onExit={() => setStep('dashboard')}
+        onExit={() => {
+          window.history.replaceState(null, '', window.location.pathname)
+          setStep('dashboard')
+        }}
       />
     )
   }
@@ -360,7 +396,11 @@ export default function Onboarding() {
               >
                 ← Назад
               </button>
-              <CreateTripScreen onCreate={handleCreateTrip} />
+              <CreateTripScreen
+                onCreate={handleCreateTrip}
+                avatar={draftAvatar}
+                onAvatarChange={setDraftAvatar}
+              />
             </motion.div>
           )}
 
@@ -382,7 +422,7 @@ export default function Onboarding() {
 
           {step === 'join' && (
             <motion.div key="join" {...screenMotion}>
-              <JoinScreen onJoin={handleJoin} />
+              <JoinScreen onJoin={handleJoin} avatar={draftAvatar} onAvatarChange={setDraftAvatar} />
             </motion.div>
           )}
 

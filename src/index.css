@@ -170,7 +170,8 @@ select {
 }
 
 .score-chip,
-.points-chip {
+.points-chip,
+.hidden-points-chip {
   display: inline-flex;
   min-width: 3rem;
   align-items: center;
@@ -206,6 +207,13 @@ select {
   padding: 0.55rem 0.75rem;
   background: linear-gradient(135deg, #ffd166, #fff2ca);
   font-size: 1.05rem;
+}
+
+.hidden-points-chip {
+  border-radius: 1rem;
+  padding: 0.5rem 0.65rem;
+  background: linear-gradient(135deg, #4de3c1, #e9fff8);
+  font-size: 0.95rem;
 }
 
 .case-card {

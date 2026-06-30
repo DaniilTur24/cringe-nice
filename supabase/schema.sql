@@ -13,7 +13,7 @@
 --   - zero_weight  = сумма weight у голосов со score = 0   ("отклонить")
 --   - total_weight = сумма weight по всем голосам
 --   - если zero_weight >= 50% от total_weight  -> status = 'rejected'
---       fine:   1 балл списывается у creator_id ТОЛЬКО СЕЙЧАС (не при создании —
+--       fine:   3 балла списывается у creator_id ТОЛЬКО СЕЙЧАС (не при создании —
 --               анонимность жалобы держится до этого момента), кроме Призрака
 --       reward: ничего не происходит (баллы не списывались)
 --   - иначе                                     -> status = 'approved'
@@ -104,10 +104,13 @@ create table public.proposals (
   creator_id   uuid not null references public.profiles (id) on delete cascade,
   target_id    uuid not null references public.profiles (id) on delete cascade,
   type         text not null check (type in ('fine', 'reward')),
+  docket_number integer not null,
   description  text not null,
   status       text not null default 'pending' check (status in ('pending', 'approved', 'rejected')),
   -- ROUND(AVG(score)) по ненулевым голосам в момент approved; null пока pending/rejected
   final_score  integer,
+  -- Атмосферный текст от Edge Function/OpenAI. Не участвует в игровой логике.
+  ai_verdict   text,
   created_at   timestamptz not null default now(),
   -- Снапшот роли автора на момент создания (handle_new_proposal) — нужен,
   -- чтобы знать про Призрака/Олигарха без join по trip_members, который к
@@ -121,6 +124,8 @@ create table public.proposals (
 
 create index proposals_trip_id_idx on public.proposals (trip_id);
 create index proposals_status_idx on public.proposals (status);
+create unique index proposals_trip_type_docket_number_key
+  on public.proposals (trip_id, type, docket_number);
 
 -- Не больше одного pending-предложения на поездку одновременно — пока
 -- текущее не решено (approved/rejected), второй иск или награду никому не
@@ -205,6 +210,13 @@ begin
 
   v_creator_role := coalesce(v_creator_metadata ->> 'role', 'civilian');
   new.creator_role := v_creator_role;
+
+  if new.docket_number is null then
+    select coalesce(max(docket_number), 0) + 1
+    into new.docket_number
+    from public.proposals
+    where trip_id = new.trip_id and type = new.type;
+  end if;
 
   return new;
 end;
@@ -378,7 +390,7 @@ begin
     -- который ни штрафа не платит, ни раскрытия не получает.
     if v_proposal.type = 'fine' and v_proposal.creator_role <> 'ghost' then
       update public.trip_members
-      set total_points = total_points - 1
+      set total_points = total_points - 3
       where trip_id = v_proposal.trip_id and user_id = v_proposal.creator_id;
     end if;
   else
@@ -454,7 +466,50 @@ create trigger after_vote_insert
   execute function public.close_proposal_if_complete();
 
 -- ----------------------------------------------------------------------------
--- 4. Защита current_role от прямого изменения пользователем через UPDATE
+-- 4. AI flavor verdict request. Игровая логика от этого не зависит: если URL/ключ
+--    Edge Function не настроены или HTTP-вызов не сработал, обычный вердикт
+--    и история всё равно работают.
+-- ----------------------------------------------------------------------------
+create function public.request_ai_verdict_generation()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_function_url text;
+  v_function_key text;
+begin
+  if old.status = 'pending'
+     and new.status in ('approved', 'rejected')
+     and new.ai_verdict is null then
+    v_function_url := current_setting('app.settings.generate_verdict_url', true);
+    v_function_key := current_setting('app.settings.generate_verdict_key', true);
+
+    if coalesce(v_function_url, '') <> '' and coalesce(v_function_key, '') <> '' then
+      perform net.http_post(
+        url := v_function_url,
+        headers := jsonb_build_object(
+          'Content-Type', 'application/json',
+          'Authorization', 'Bearer ' || v_function_key
+        ),
+        body := jsonb_build_object('proposal_id', new.id)
+      );
+    end if;
+  end if;
+
+  return new;
+end;
+$$;
+
+create trigger on_proposal_ai_verdict_request
+  after update of status on public.proposals
+  for each row
+  when (old.status = 'pending' and new.status in ('approved', 'rejected'))
+  execute function public.request_ai_verdict_generation();
+
+-- ----------------------------------------------------------------------------
+-- 5. Защита current_role от прямого изменения пользователем через UPDATE
 --    profiles (RLS разрешает обновлять свой профиль, но не эту колонку).
 --    total_points больше не живёт на profiles (см. trip_members выше), так
 --    что этому триггеру достаточно следить только за current_role.
@@ -482,7 +537,7 @@ create trigger before_profile_update
   execute function public.lock_protected_profile_fields();
 
 -- ----------------------------------------------------------------------------
--- 5. Завершение/отмена поездки создателем (status: active -> finished или
+-- 6. Завершение/отмена поездки создателем (status: active -> finished или
 --    cancelled) автоматически отклоняет всё, что всё ещё голосуется в ней —
 --    иначе такое предложение осталось бы pending навечно.
 -- ----------------------------------------------------------------------------
@@ -507,7 +562,7 @@ create trigger on_trip_status_change
   execute function public.reject_pending_proposals_on_trip_close();
 
 -- ----------------------------------------------------------------------------
--- 6. assign_trip_role — рулетка + dev-панель + ежедневный реролл. Идемпотентна
+-- 7. assign_trip_role — рулетка + dev-панель + ежедневный реролл. Идемпотентна
 --    в пределах одного дня (role_metadata.assigned_at = сегодня -> возврат
 --    как есть), p_force_reassign=true (только dev-панель) обходит это.
 --    pg_advisory_xact_lock защищает от двух одновременных спинов в одном
@@ -710,7 +765,7 @@ begin
     raise exception 'Некорректный scope разоблачения: %', p_scope;
   end if;
 
-  select trip_id, type, status, creator_role, creator_revealed_to_all
+  select trip_id, creator_id, type, status, creator_role, creator_revealed_to_all
   into v_proposal
   from public.proposals
   where id = p_proposal_id
@@ -718,6 +773,9 @@ begin
 
   if v_proposal is null then
     raise exception 'Предложение не найдено';
+  end if;
+  if v_proposal.creator_id = auth.uid() then
+    raise exception 'Нельзя разоблачить автора своей жалобы';
   end if;
   if v_proposal.status = 'pending' then
     raise exception 'Нельзя разоблачить автора пока дело не закрыто';
