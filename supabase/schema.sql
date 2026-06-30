@@ -13,7 +13,7 @@
 --   - zero_weight  = сумма weight у голосов со score = 0   ("отклонить")
 --   - total_weight = сумма weight по всем голосам
 --   - если zero_weight >= 50% от total_weight  -> status = 'rejected'
---       fine:   1 балл списывается у creator_id ТОЛЬКО СЕЙЧАС (не при создании —
+--       fine:   3 балла списывается у creator_id ТОЛЬКО СЕЙЧАС (не при создании —
 --               анонимность жалобы держится до этого момента), кроме Призрака
 --       reward: ничего не происходит (баллы не списывались)
 --   - иначе                                     -> status = 'approved'
@@ -390,7 +390,7 @@ begin
     -- который ни штрафа не платит, ни раскрытия не получает.
     if v_proposal.type = 'fine' and v_proposal.creator_role <> 'ghost' then
       update public.trip_members
-      set total_points = total_points - 1
+      set total_points = total_points - 3
       where trip_id = v_proposal.trip_id and user_id = v_proposal.creator_id;
     end if;
   else

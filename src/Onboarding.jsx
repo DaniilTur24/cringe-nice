@@ -15,8 +15,7 @@ import JoinScreen from './components/onboarding/JoinScreen'
 import ManifestScreen from './components/onboarding/ManifestScreen'
 import RoleWheel from './components/onboarding/RoleWheel'
 import ProfileMenu from './components/ProfileMenu'
-
-const ADMIN_AVATAR = 'ADM'
+import { AVATARS } from './lib/avatars'
 
 function todayISO() {
   return new Date().toISOString().slice(0, 10)
@@ -54,6 +53,17 @@ async function fetchTripStatus(tripId) {
   return data.status
 }
 
+async function fetchTripMemberAvatar(tripId, userId) {
+  const { data, error } = await supabase
+    .from('trip_members')
+    .select('avatar_url')
+    .eq('trip_id', tripId)
+    .eq('user_id', userId)
+    .maybeSingle()
+  if (error) throw error
+  return data?.avatar_url ?? null
+}
+
 // Роль сгорает каждые сутки (role_metadata.assigned_at) — true значит можно
 // идти прямо в Courtroom, false значит нужно сперва прогнать через рулетку.
 async function hasRoleForToday(tripId, userId) {
@@ -83,6 +93,7 @@ export default function Onboarding() {
   const [email, setEmail] = useState('')
   const [profile, setProfile] = useState(null)
   const [toast, setToast] = useState(null)
+  const [draftAvatar, setDraftAvatar] = useState(AVATARS[0])
   // Куда идти после 'role-wheel' — разное для входа в существующий трип,
   // создания нового и присоединения по ссылке.
   const [rolewheelNextStep, setRolewheelNextStep] = useState('ready')
@@ -97,6 +108,11 @@ export default function Onboarding() {
     setTripStatus(status)
     setTripId(id)
     window.history.replaceState(null, '', `?trip_id=${id}`)
+    const avatar = await fetchTripMemberAvatar(id, uid).catch(() => null)
+    if (avatar) {
+      setDraftAvatar(avatar)
+      setProfile((current) => current ? { ...current, avatar_url: avatar } : current)
+    }
 
     const isFresh = await hasRoleForToday(id, uid).catch(() => false)
     if (isFresh) {
@@ -119,6 +135,7 @@ export default function Onboarding() {
       } else {
         setTripId(tripIdFromUrl)
         setTripStatus(status)
+        setDraftAvatar(AVATARS[0])
         window.history.replaceState(null, '', `?trip_id=${tripIdFromUrl}`)
         setStep('join')
       }
@@ -170,6 +187,7 @@ export default function Onboarding() {
     setProfile(null)
     setEmail('')
     setTripId(null)
+    setDraftAvatar(AVATARS[0])
     window.history.replaceState(null, '', window.location.pathname)
     setStep('email')
   }
@@ -237,7 +255,7 @@ export default function Onboarding() {
     }
   }
 
-  async function handleCreateTrip(tripName, adminName, roleSettings) {
+  async function handleCreateTrip(tripName, adminName, adminAvatar, roleSettings) {
     try {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) throw new Error('Сессия истекла, войди заново.')
@@ -254,7 +272,7 @@ export default function Onboarding() {
       const { error: memberError } = await supabase
         .from('trip_members')
         .upsert(
-          [{ trip_id: trip.id, user_id: user.id, nickname: adminName, avatar_url: ADMIN_AVATAR }],
+          [{ trip_id: trip.id, user_id: user.id, nickname: adminName, avatar_url: adminAvatar }],
           { onConflict: 'trip_id,user_id' }
         )
       if (memberError) throw memberError
@@ -262,6 +280,8 @@ export default function Onboarding() {
       window.history.replaceState(null, '', `?trip_id=${trip.id}`)
       setTripId(trip.id)
       setUserId(user.id)
+      setDraftAvatar(adminAvatar)
+      setProfile((current) => current ? { ...current, avatar_url: adminAvatar } : current)
       setRolewheelNextStep('invite-link')
       setStep('role-wheel')
     } catch (err) {
@@ -284,6 +304,8 @@ export default function Onboarding() {
 
       window.history.replaceState(null, '', `?trip_id=${tripId}`)
       setUserId(user.id)
+      setDraftAvatar(avatar)
+      setProfile((current) => current ? { ...current, avatar_url: avatar } : current)
       setRolewheelNextStep('manifest')
       setStep('role-wheel')
     } catch (err) {
@@ -292,7 +314,7 @@ export default function Onboarding() {
   }
 
   const profileMenu = profile ? (
-    <ProfileMenu profile={profile} email={email} onLogout={handleLogout} />
+    <ProfileMenu profile={profile} email={email} onLogout={handleLogout} avatar={draftAvatar ?? profile.avatar_url} />
   ) : null
 
   if (step === 'dashboard') {
@@ -374,7 +396,11 @@ export default function Onboarding() {
               >
                 ← Назад
               </button>
-              <CreateTripScreen onCreate={handleCreateTrip} />
+              <CreateTripScreen
+                onCreate={handleCreateTrip}
+                avatar={draftAvatar}
+                onAvatarChange={setDraftAvatar}
+              />
             </motion.div>
           )}
 
@@ -396,7 +422,7 @@ export default function Onboarding() {
 
           {step === 'join' && (
             <motion.div key="join" {...screenMotion}>
-              <JoinScreen onJoin={handleJoin} />
+              <JoinScreen onJoin={handleJoin} avatar={draftAvatar} onAvatarChange={setDraftAvatar} />
             </motion.div>
           )}
 

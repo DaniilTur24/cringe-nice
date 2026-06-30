@@ -3,11 +3,11 @@ import Card from '../Card'
 import Input from '../Input'
 import Button from '../Button'
 import AvatarPicker from '../AvatarPicker'
+import GameRulesCard from '../GameRules'
 import { AVATARS } from '../../lib/avatars'
 
-export default function JoinScreen({ onJoin }) {
+export default function JoinScreen({ onJoin, avatar = AVATARS[0], onAvatarChange }) {
   const [username, setUsername] = useState('')
-  const [avatar, setAvatar] = useState(AVATARS[0])
   const [submitting, setSubmitting] = useState(false)
 
   async function handleSubmit(e) {
@@ -19,23 +19,27 @@ export default function JoinScreen({ onJoin }) {
   }
 
   return (
-    <Card>
-      <span className="panel-label">Guest pass</span>
-      <h2 className="mt-4 text-2xl font-black leading-tight">Тебя пригласили в Le Grand Суд</h2>
-      <p className="mt-2 text-sm font-bold text-ink/65">
-        Выбери имя и аватар, чтобы вступить в игру.
-      </p>
-      <form onSubmit={handleSubmit} className="mt-4 space-y-4">
-        <Input
-          placeholder="Твоё имя"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-        />
-        <AvatarPicker value={avatar} onChange={setAvatar} />
-        <Button type="submit" variant="gold" className="w-full" disabled={submitting}>
-          {submitting ? 'Вступаем...' : 'Вступить в игру'}
-        </Button>
-      </form>
-    </Card>
+    <div className="space-y-4">
+      <GameRulesCard />
+
+      <Card>
+        <span className="panel-label">Guest pass</span>
+        <h2 className="mt-4 text-2xl font-black leading-tight">Тебя пригласили в Le Grand Суд</h2>
+        <p className="mt-2 text-sm font-bold text-ink/65">
+          Выбери имя и аватар для этой поездки. Именно так тебя увидят в суде.
+        </p>
+        <form onSubmit={handleSubmit} className="mt-4 space-y-4">
+          <Input
+            placeholder="Твоё имя"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+          />
+          <AvatarPicker value={avatar} onChange={onAvatarChange} />
+          <Button type="submit" variant="gold" className="w-full" disabled={submitting}>
+            {submitting ? 'Вступаем...' : 'Вступить в игру'}
+          </Button>
+        </form>
+      </Card>
+    </div>
   )
 }

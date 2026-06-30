@@ -1,5 +1,6 @@
 import { motion } from 'framer-motion'
-import { AVATARS, avatarLabel } from '../lib/avatars'
+import AvatarIcon from './AvatarIcon'
+import { AVATARS, avatarLabel, normalizeAvatar } from '../lib/avatars'
 
 export default function AvatarPicker({ value, onChange }) {
   return (
@@ -10,11 +11,12 @@ export default function AvatarPicker({ value, onChange }) {
           type="button"
           whileTap={{ scale: 0.9 }}
           onClick={() => onChange(avatar)}
-          className={`flex aspect-square min-h-14 items-center justify-center rounded-[1rem] border-[3px] border-ink text-sm font-black shadow-neo-sm transition ${
-            value === avatar ? 'bg-mint text-ink' : 'bg-white text-ink'
+          title={avatarLabel(avatar)}
+          className={`flex aspect-square min-h-14 items-center justify-center rounded-[1rem] border-[3px] border-ink p-1.5 shadow-neo-sm transition ${
+            normalizeAvatar(value) === avatar ? 'bg-mint text-ink' : 'bg-white text-ink'
           }`}
         >
-          {avatarLabel(avatar)}
+          <AvatarIcon value={avatar} className="h-full w-full" />
         </motion.button>
       ))}
     </div>

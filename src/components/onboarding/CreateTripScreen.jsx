@@ -2,10 +2,13 @@ import { useState } from 'react'
 import Card from '../Card'
 import Input from '../Input'
 import Button from '../Button'
+import AvatarPicker from '../AvatarPicker'
+import GameRulesCard from '../GameRules'
 import RoleSettingsFields from '../RoleSettingsFields'
+import { AVATARS } from '../../lib/avatars'
 import { DEFAULT_ROLE_SETTINGS } from '../../lib/roleSettings'
 
-export default function CreateTripScreen({ onCreate }) {
+export default function CreateTripScreen({ onCreate, avatar = AVATARS[0], onAvatarChange }) {
   const [tripName, setTripName] = useState('')
   const [adminName, setAdminName] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -16,45 +19,50 @@ export default function CreateTripScreen({ onCreate }) {
     e.preventDefault()
     if (!tripName.trim() || !adminName.trim()) return
     setSubmitting(true)
-    await onCreate(tripName.trim(), adminName.trim(), roleSettings)
+    await onCreate(tripName.trim(), adminName.trim(), avatar, roleSettings)
     setSubmitting(false)
   }
 
   return (
-    <Card>
-      <span className="panel-label">Nouvelle partie</span>
-      <h2 className="mt-4 text-2xl font-black leading-tight">Новая поездка</h2>
-      <p className="mt-2 text-sm font-bold text-ink/65">
-        Создай поездку и пригласи друзей в свой Grand Суд.
-      </p>
-      <form onSubmit={handleSubmit} className="mt-4 space-y-3">
-        <Input
-          placeholder="Название поездки"
-          value={tripName}
-          onChange={(e) => setTripName(e.target.value)}
-        />
-        <Input
-          placeholder="Твоё имя (ты будешь админом)"
-          value={adminName}
-          onChange={(e) => setAdminName(e.target.value)}
-        />
+    <div className="space-y-4">
+      <GameRulesCard />
 
-        <button
-          type="button"
-          onClick={() => setShowRoleSettings((v) => !v)}
-          className="text-sm font-bold text-ink/70 underline"
-        >
-          {showRoleSettings ? 'Скрыть настройки ролей' : 'Настроить роли (необязательно)'}
-        </button>
+      <Card>
+        <span className="panel-label">Nouvelle partie</span>
+        <h2 className="mt-4 text-2xl font-black leading-tight">Новая поездка</h2>
+        <p className="mt-2 text-sm font-bold text-ink/65">
+          Создай поездку, выбери судейский образ и пригласи друзей.
+        </p>
+        <form onSubmit={handleSubmit} className="mt-4 space-y-3">
+          <Input
+            placeholder="Название поездки"
+            value={tripName}
+            onChange={(e) => setTripName(e.target.value)}
+          />
+          <Input
+            placeholder="Твоё имя (ты будешь админом)"
+            value={adminName}
+            onChange={(e) => setAdminName(e.target.value)}
+          />
+          <AvatarPicker value={avatar} onChange={onAvatarChange} />
 
-        {showRoleSettings && (
-          <RoleSettingsFields settings={roleSettings} onChange={setRoleSettings} />
-        )}
+          <button
+            type="button"
+            onClick={() => setShowRoleSettings((v) => !v)}
+            className="text-sm font-bold text-ink/70 underline"
+          >
+            {showRoleSettings ? 'Скрыть настройки ролей' : 'Настроить роли (необязательно)'}
+          </button>
 
-        <Button type="submit" variant="gold" className="w-full" disabled={submitting}>
-          {submitting ? 'Создаём...' : 'Создать'}
-        </Button>
-      </form>
-    </Card>
+          {showRoleSettings && (
+            <RoleSettingsFields settings={roleSettings} onChange={setRoleSettings} />
+          )}
+
+          <Button type="submit" variant="gold" className="w-full" disabled={submitting}>
+            {submitting ? 'Создаём...' : 'Создать'}
+          </Button>
+        </form>
+      </Card>
+    </div>
   )
 }

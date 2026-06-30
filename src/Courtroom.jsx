@@ -13,6 +13,7 @@ import RoleBadge from './components/RoleBadge'
 import ProposalHistory from './components/ProposalHistory'
 import CreateProposalButton from './components/CreateProposalButton'
 import GameShell from './components/GameShell'
+import RulesModal from './components/RulesModal'
 
 async function loadProposalDetails(proposalId) {
   const { data, error } = await supabase
@@ -57,7 +58,7 @@ function buildVerdictMessage(proposal, status, finalScore, judgeOverrideScore) {
     return `${docketTitle} отклонено. ${proposal.targetName} оправдан(а)! Автор — Призрак: имя не раскрывается, баллы не списываются.`
   }
   return proposal.type === 'fine'
-    ? `${docketTitle} отклонено. ${proposal.targetName} оправдан(а)! У ябеды ${proposal.creatorName} забрали 1 балл.`
+    ? `${docketTitle} отклонено. ${proposal.targetName} оправдан(а)! Ябеда ${proposal.creatorName} раскрыта и наказана: -3 балла за ложный донос.`
     : `${docketTitle} отклонён.`
 }
 
@@ -214,6 +215,7 @@ export default function Courtroom({ tripId, userId, tripStatus = 'active', profi
   const [verdictQueue, setVerdictQueue] = useState([])
   const [toast, setToast] = useState(null)
   const [dismissedMembersError, setDismissedMembersError] = useState(null)
+  const [rulesOpen, setRulesOpen] = useState(false)
   const { members, error: membersError } = useTripMembers(tripId)
   const { roleMetadata } = useTripRole(tripId, userId)
   const hasStoredVerdictStateRef = useRef(false)
@@ -668,6 +670,15 @@ export default function Courtroom({ tripId, userId, tripStatus = 'active', profi
   return (
     <GameShell topRight={profileMenu}>
       <div className="flex flex-1 flex-col gap-6 pb-24">
+        <button
+          type="button"
+          aria-label="Открыть правила"
+          onClick={() => setRulesOpen(true)}
+          className="fixed bottom-24 left-4 z-40 flex h-12 w-12 items-center justify-center rounded-full border-[3px] border-ink bg-white text-2xl font-black leading-none text-ink shadow-neo-sm transition hover:bg-gold focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-gold/60"
+        >
+          ?
+        </button>
+
         {onExit && (
           <button
             type="button"
@@ -768,6 +779,8 @@ export default function Courtroom({ tripId, userId, tripStatus = 'active', profi
           disabled={proposals.length > 0}
         />
       )}
+
+      <RulesModal open={rulesOpen} onClose={() => setRulesOpen(false)} />
     </GameShell>
   )
 }
