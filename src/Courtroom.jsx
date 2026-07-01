@@ -36,7 +36,7 @@ async function loadProposalDetails(proposalId) {
   }
 }
 
-function buildVerdictMessage(proposal, status, finalScore, judgeOverrideScore) {
+function buildVerdictMessage(proposal, status, finalScore, judgeOverrideScore, prosecutorDoubleVote) {
   const isGhostFine = proposal.type === 'fine' && proposal.creator_role === 'ghost'
   const docketTitle = proposalDocketTitle(proposal)
 
@@ -49,17 +49,39 @@ function buildVerdictMessage(proposal, status, finalScore, judgeOverrideScore) {
       message += ' Автор — Призрак, эта жалоба не попадёт в архив дел.'
     }
     if (judgeOverrideScore != null) {
-      message += ` Верховный Судья превысил полномочия и поставил оценку ${judgeOverrideScore}!`
+      message += ` Верховный Судья принял нелёгкое решение и поставил оценку ${judgeOverrideScore}!`
+    }
+    if (prosecutorDoubleVote != null) {
+      message += ' Прокурор — говнистый коррупционер — воспользовался своими грязными полномочиями и проголосовал дважды!'
+      // voted to reject (score=0) but approved → облажался
+      if (prosecutorDoubleVote.score === 0) {
+        message += ' Но всё равно облажался.'
+      }
     }
     return message
   }
   if (isGhostFine) {
     // Призрак ни штрафа не платит, ни раскрытия не получает — даже в попапе.
-    return `${docketTitle} отклонено. ${proposal.targetName} оправдан(а)! Автор — Призрак: имя не раскрывается, баллы не списываются.`
+    let ghostMsg = `${docketTitle} отклонено. ${proposal.targetName} оправдан(а)! Автор — Призрак: имя не раскрывается, баллы не списываются.`
+    if (prosecutorDoubleVote != null) {
+      ghostMsg += ' Прокурор — говнистый коррупционер — воспользовался своими грязными полномочиями и проголосовал дважды!'
+      if (prosecutorDoubleVote.score !== 0) {
+        ghostMsg += ' Но всё равно облажался.'
+      }
+    }
+    return ghostMsg
   }
-  return proposal.type === 'fine'
-    ? `${docketTitle} отклонено. ${proposal.targetName} оправдан(а)! Ябеда ${proposal.creatorName} раскрыта и наказана: -3 балла за ложный донос.`
+  let message = proposal.type === 'fine'
+    ? `${docketTitle} отклонено. ${proposal.targetName} оправдан(а)! Крыса ${proposal.creatorName} поймана за шкирку и наказана: -3 балла за ложный донос.`
     : `${docketTitle} отклонён.`
+  if (prosecutorDoubleVote != null) {
+    message += ' Прокурор — говнистый коррупционер — воспользовался своими грязными полномочиями и проголосовал дважды!'
+    // voted to approve (score!=0) but rejected → облажался
+    if (prosecutorDoubleVote.score !== 0) {
+      message += ' Но всё равно облажался.'
+    }
+  }
+  return message
 }
 
 async function loadJudgeOverrideScore(proposalId) {
@@ -72,6 +94,18 @@ async function loadJudgeOverrideScore(proposalId) {
 
   if (error) throw error
   return data?.score ?? null
+}
+
+async function loadProsecutorDoubleVote(proposalId) {
+  const { data, error } = await supabase
+    .from('votes')
+    .select('score')
+    .eq('proposal_id', proposalId)
+    .eq('weight', 2)
+    .maybeSingle()
+
+  if (error) throw error
+  return data ?? null
 }
 
 async function loadResolvedProposalIds(tripId) {
@@ -206,6 +240,13 @@ async function requestAiVerdict(proposalId) {
   if (error) throw error
 }
 
+async function loadVoteCounts(proposalId) {
+  const { data, error } = await supabase.rpc('get_vote_counts', { p_proposal_id: proposalId })
+  if (error) throw error
+  const row = data?.[0] ?? { approve_count: 0, reject_count: 0, total_count: 0 }
+  return { approve: row.approve_count, reject: row.reject_count, total: row.total_count }
+}
+
 export default function Courtroom({ tripId, userId, tripStatus = 'active', profileMenu, onExit }) {
   const [loading, setLoading] = useState(true)
   // Every still-open proposal stays in this list at once, so two complaints
@@ -221,6 +262,7 @@ export default function Courtroom({ tripId, userId, tripStatus = 'active', profi
   const hasStoredVerdictStateRef = useRef(false)
   const hasStoredOligarchRevealStateRef = useRef(false)
   const hasStoredDetectiveRevealStateRef = useRef(false)
+  const voteEventChannelRef = useRef(null)
 
   // members carries each member's per-trip nickname already (see
   // useTripMembers) — used to relabel proposal creator/target names so the
@@ -299,8 +341,10 @@ export default function Courtroom({ tripId, userId, tripStatus = 'active', profi
   }
 
   async function queueVerdict(proposal, status, finalScore) {
-    const judgeOverrideScore =
-      status === 'approved' ? await loadJudgeOverrideScore(proposal.id).catch(() => null) : null
+    const [judgeOverrideScore, prosecutorDoubleVote] = await Promise.all([
+      status === 'approved' ? loadJudgeOverrideScore(proposal.id).catch(() => null) : Promise.resolve(null),
+      loadProsecutorDoubleVote(proposal.id).catch(() => null),
+    ])
 
     setVerdictQueue((prev) => [
       ...prev,
@@ -310,7 +354,8 @@ export default function Courtroom({ tripId, userId, tripStatus = 'active', profi
           withTripNames(proposal, membersByIdRef.current),
           status,
           finalScore,
-          judgeOverrideScore
+          judgeOverrideScore,
+          prosecutorDoubleVote
         ),
         aiVerdict: proposal.ai_verdict ?? null,
         aiPending: !proposal.ai_verdict,
@@ -378,18 +423,23 @@ export default function Courtroom({ tripId, userId, tripStatus = 'active', profi
         if (cancelled) return
 
         let votedIds = new Set()
+        let voteCountsList = detailsList.map(() => ({ approve: 0, reject: 0, total: 0 }))
         if (detailsList.length > 0) {
-          const { data: ownVotes, error: voteError } = await supabase
-            .from('votes')
-            .select('proposal_id')
-            .in('proposal_id', detailsList.map((d) => d.id))
-            .eq('voter_id', userId)
-          if (voteError) throw voteError
+          const [ownVotesResult, ...countResults] = await Promise.all([
+            supabase
+              .from('votes')
+              .select('proposal_id')
+              .in('proposal_id', detailsList.map((d) => d.id))
+              .eq('voter_id', userId),
+            ...detailsList.map((d) => loadVoteCounts(d.id).catch(() => ({ approve: 0, reject: 0, total: 0 }))),
+          ])
+          if (ownVotesResult.error) throw ownVotesResult.error
           if (cancelled) return
-          votedIds = new Set((ownVotes ?? []).map((v) => v.proposal_id))
+          votedIds = new Set((ownVotesResult.data ?? []).map((v) => v.proposal_id))
+          voteCountsList = countResults
         }
 
-        setProposals(detailsList.map((d) => ({ ...d, hasVoted: votedIds.has(d.id) })))
+        setProposals(detailsList.map((d, i) => ({ ...d, hasVoted: votedIds.has(d.id), voteCounts: voteCountsList[i] })))
       } catch (err) {
         if (!cancelled) setToast({ type: 'error', message: err.message })
       } finally {
@@ -548,8 +598,11 @@ export default function Courtroom({ tripId, userId, tripStatus = 'active', profi
         async (payload) => {
           if (payload.new.status !== 'pending') return
           try {
-            const details = await loadProposalDetails(payload.new.id)
-            setProposals((prev) => [...prev, { ...details, hasVoted: false }])
+            const [details, voteCounts] = await Promise.all([
+              loadProposalDetails(payload.new.id),
+              loadVoteCounts(payload.new.id).catch(() => ({ approve: 0, reject: 0, total: 0 })),
+            ])
+            setProposals((prev) => [...prev, { ...details, hasVoted: false, voteCounts }])
           } catch (err) {
             setToast({ type: 'error', message: err.message })
           }
@@ -653,6 +706,28 @@ export default function Courtroom({ tripId, userId, tripStatus = 'active', profi
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tripId])
 
+  useEffect(() => {
+    const channel = supabase
+      .channel(`trip-${tripId}-vote-events`)
+      .on('broadcast', { event: 'vote_cast' }, async ({ payload }) => {
+        if (!proposalsRef.current.find((p) => p.id === payload.proposal_id)) return
+        try {
+          const voteCounts = await loadVoteCounts(payload.proposal_id)
+          setProposals((prev) =>
+            prev.map((p) => (p.id === payload.proposal_id ? { ...p, voteCounts } : p))
+          )
+        } catch {
+          // count refresh failure is non-fatal
+        }
+      })
+      .subscribe()
+    voteEventChannelRef.current = channel
+    return () => {
+      supabase.removeChannel(channel)
+      voteEventChannelRef.current = null
+    }
+  }, [tripId])
+
   async function handleSubmitVote(proposalId, score, weight = 1) {
     const { error } = await supabase
       .from('votes')
@@ -663,7 +738,23 @@ export default function Courtroom({ tripId, userId, tripStatus = 'active', profi
       return { error }
     }
 
-    setProposals((prev) => prev.map((p) => (p.id === proposalId ? { ...p, hasVoted: true } : p)))
+    if (weight === 2) {
+      setToast({ type: 'success', message: 'Прокурор задействовал двойные полномочия — голос засчитан дважды!' })
+    }
+
+    voteEventChannelRef.current?.send({
+      type: 'broadcast',
+      event: 'vote_cast',
+      payload: { proposal_id: proposalId },
+    })
+
+    const voteCounts = await loadVoteCounts(proposalId).catch(() => null)
+    setProposals((prev) =>
+      prev.map((p) => {
+        if (p.id !== proposalId) return p
+        return { ...p, hasVoted: true, ...(voteCounts ? { voteCounts } : {}) }
+      })
+    )
     return { error: null }
   }
 
@@ -730,6 +821,25 @@ export default function Courtroom({ tripId, userId, tripStatus = 'active', profi
           proposals.map((proposal) => {
             const isSpectator = proposal.creator_id === userId || proposal.target_id === userId
             const proposalForCard = proposalCardContent(withTripNames(proposal))
+            const vc = proposal.voteCounts ?? { approve: 0, reject: 0, total: 0 }
+            const totalExpected = members.filter(
+              (m) => m.id !== proposal.creator_id && m.id !== proposal.target_id
+            ).length
+            const remaining = Math.max(0, totalExpected - vc.total)
+
+            const voteProgress = (
+              <div className="mt-3 flex items-center justify-center gap-3 text-sm font-bold">
+                <span className="text-french-blue">{vc.approve} за</span>
+                <span className="text-ink/30">·</span>
+                <span className="text-juicy-red">{vc.reject} против</span>
+                {remaining > 0 && (
+                  <>
+                    <span className="text-ink/30">·</span>
+                    <span className="text-ink/55">ждём ещё {remaining}</span>
+                  </>
+                )}
+              </div>
+            )
 
             if (isSpectator) {
               return (
@@ -740,6 +850,7 @@ export default function Courtroom({ tripId, userId, tripStatus = 'active', profi
                     {proposalForCard.description}
                   </p>
                   <p className="mt-4 text-sm font-bold text-ink/65">Голосуют без тебя, жди вердикта.</p>
+                  {voteProgress}
                 </Card>
               )
             }
@@ -751,6 +862,7 @@ export default function Courtroom({ tripId, userId, tripStatus = 'active', profi
                   <h2 className="mt-4 text-2xl font-black leading-tight">{proposalForCard.title}</h2>
                   <p className="mt-3 text-xl font-black">Ты уже проголосовал.</p>
                   <p className="mt-2 text-sm font-bold text-ink/65">Ждем остальных игроков.</p>
+                  {voteProgress}
                 </Card>
               )
             }

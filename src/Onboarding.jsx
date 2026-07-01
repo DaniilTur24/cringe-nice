@@ -149,12 +149,20 @@ export default function Onboarding() {
   // "как тебя зовут" при первом входе. username — служебное поле (берём
   // локальную часть почты), реальное имя пользователь вводит каждый раз
   // отдельно при входе/создании конкретной поездки (nickname в trip_members).
-  const routeAuthenticatedUser = useCallback(async (user, tripIdFromUrl) => {
+  // isNewAuth=true — свежий логин (OTP/OAuth), профиль можно создать.
+  // isNewAuth=false — перезагрузка с кешированным токеном; если профиля нет,
+  // значит юзер удалён из БД, но JWT ещё живой → выходим.
+  const routeAuthenticatedUser = useCallback(async (user, tripIdFromUrl, isNewAuth = false) => {
     setUserId(user.id)
     setEmail(user.email ?? '')
 
     let activeProfile = await fetchProfile(user.id)
     if (!activeProfile) {
+      if (!isNewAuth) {
+        await supabase.auth.signOut()
+        setStep('email')
+        return
+      }
       const placeholderName = (user.email ?? 'user').split('@')[0]
       const { data, error } = await supabase
         .from('profiles')
@@ -198,6 +206,9 @@ export default function Onboarding() {
     async function init() {
       try {
         const tripIdFromUrl = new URLSearchParams(window.location.search).get('trip_id')
+        // OAuth-редирект кладёт токены в хэш URL — по нему понимаем что это
+        // свежий логин, а не перезагрузка со старым JWT.
+        const isOAuthCallback = window.location.hash.includes('access_token')
         // getUser() round-trips to the server, unlike getSession() which only
         // reads the cached token — that matters if auth.users was ever reset
         // (e.g. a schema reload) while a stale session sat in localStorage.
@@ -205,7 +216,7 @@ export default function Onboarding() {
         if (cancelled) return
 
         if (user) {
-          await routeAuthenticatedUser(user, tripIdFromUrl)
+          await routeAuthenticatedUser(user, tripIdFromUrl, isOAuthCallback)
         } else {
           setStep('email')
         }
@@ -239,7 +250,7 @@ export default function Onboarding() {
       const { data, error } = await supabase.auth.verifyOtp({ email, token: code, type: 'email' })
       if (error) throw error
       const tripIdFromUrl = new URLSearchParams(window.location.search).get('trip_id')
-      await routeAuthenticatedUser(data.user, tripIdFromUrl)
+      await routeAuthenticatedUser(data.user, tripIdFromUrl, true)
     } catch (err) {
       setToast({ type: 'error', message: err.message })
     }
