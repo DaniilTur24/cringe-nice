@@ -31,9 +31,19 @@ export function useBackgroundMusic(src) {
     window.addEventListener('pointerdown', unlock)
     window.addEventListener('keydown', unlock)
 
+    function handleVisibility() {
+      if (document.hidden) {
+        audio.pause()
+      } else if (!audio.muted) {
+        audio.play().catch(() => {})
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibility)
+
     return () => {
       window.removeEventListener('pointerdown', unlock)
       window.removeEventListener('keydown', unlock)
+      document.removeEventListener('visibilitychange', handleVisibility)
       audio.pause()
       audioRef.current = null
     }

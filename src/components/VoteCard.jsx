@@ -67,9 +67,7 @@ export default function VoteCard({ proposal, onSubmit, voterRole, voterRoleMetad
   }
 
   function handleReject() {
-    // Отклонение всегда весом 1 — удвоение Прокурора имеет смысл только для
-    // ненулевого балла, который входит во взвешенное среднее.
-    submitVote(0, -1, 1)
+    submitVote(0, -1, isDouble ? 2 : 1)
   }
 
   function handleConfirm() {
@@ -110,22 +108,34 @@ export default function VoteCard({ proposal, onSubmit, voterRole, voterRoleMetad
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
-                  className="mt-6 grid grid-cols-2 gap-3"
+                  className="mt-6"
                 >
-                  <Button
-                    variant="secondary"
-                    disabled={submitting}
-                    onClick={handleReject}
-                  >
-                    Отклонить
-                  </Button>
-                  <Button
-                    variant={config.agreeVariant}
-                    disabled={submitting}
-                    onClick={() => setSubStep('slider')}
-                  >
-                    {config.agreeLabel}
-                  </Button>
+                  {canDoubleVote && (
+                    <label className="mb-3 flex items-center gap-2 rounded-[1rem] border-2 border-ink bg-white/75 p-3 text-sm font-bold">
+                      <input
+                        type="checkbox"
+                        checked={isDouble}
+                        onChange={(e) => setIsDouble(e.target.checked)}
+                      />
+                      Удвоить голос (осталось {doubleVotesRemaining}/{doubleVoteLimit} сегодня)
+                    </label>
+                  )}
+                  <div className="grid grid-cols-2 gap-3">
+                    <Button
+                      variant="secondary"
+                      disabled={submitting}
+                      onClick={handleReject}
+                    >
+                      Отклонить
+                    </Button>
+                    <Button
+                      variant={config.agreeVariant}
+                      disabled={submitting}
+                      onClick={() => setSubStep('slider')}
+                    >
+                      {config.agreeLabel}
+                    </Button>
+                  </div>
                 </motion.div>
               ) : (
                 <motion.div
@@ -135,6 +145,16 @@ export default function VoteCard({ proposal, onSubmit, voterRole, voterRoleMetad
                   exit={{ opacity: 0 }}
                   className="mt-6"
                 >
+                  <div className="mb-4 flex justify-end">
+                    <button
+                      type="button"
+                      aria-label="Назад"
+                      onClick={() => setSubStep('choice')}
+                      className="flex h-9 w-9 items-center justify-center rounded-full border-[3px] border-ink bg-white text-xl font-black leading-none shadow-neo-sm"
+                    >
+                      ×
+                    </button>
+                  </div>
                   <div className="flex justify-center">
                     <motion.span
                       key={magnitude}
@@ -156,17 +176,6 @@ export default function VoteCard({ proposal, onSubmit, voterRole, voterRoleMetad
                     className="neo-range mt-4 w-full"
                     style={{ '--thumb-color': config.color }}
                   />
-
-                  {canDoubleVote && (
-                    <label className="mt-4 flex items-center gap-2 rounded-[1rem] border-2 border-ink bg-white/75 p-3 text-sm font-bold">
-                      <input
-                        type="checkbox"
-                        checked={isDouble}
-                        onChange={(e) => setIsDouble(e.target.checked)}
-                      />
-                      Удвоить голос (осталось {doubleVotesRemaining}/{doubleVoteLimit} сегодня)
-                    </label>
-                  )}
 
                   <Button
                     variant={config.agreeVariant}

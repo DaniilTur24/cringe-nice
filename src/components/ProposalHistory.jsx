@@ -39,9 +39,7 @@ async function loadHistory(tripId) {
     rows = (fallbackData ?? []).map((row) => ({ ...row, docket_number: null }))
   }
 
-  // Призрак полностью исключен из истории: для него записи как будто не существует.
   return (rows ?? [])
-    .filter((row) => !(row.type === 'fine' && row.creator_role === 'ghost'))
     .map((row) => ({
       ...row,
       creatorName: row.creator?.username ?? 'Неизвестный',
@@ -51,6 +49,7 @@ async function loadHistory(tripId) {
 }
 
 function isCreatorVisible(proposal, selfRevealedIds) {
+  if (proposal.creator_role === 'ghost') return false
   if (proposal.type === 'reward') return true
   if (proposal.status === 'rejected') return true
   if (proposal.creator_revealed_to_all) return true
@@ -193,9 +192,10 @@ export default function ProposalHistory({ tripId, userId, roleMetadata, members 
             const selfRevealedByMe = selfRevealedIds.has(proposal.id)
             const isEligibleFine = proposal.type === 'fine' && proposal.status === 'approved'
             const isOwnProposal = proposal.creator_id === userId
-            const canRevealSelf = isDetective && isEligibleFine && revealsRemaining > 0 && !visible && !isOwnProposal
+            const isGhost = proposal.creator_role === 'ghost'
+            const canRevealSelf = isDetective && isEligibleFine && revealsRemaining > 0 && !visible && !isOwnProposal && !isGhost
             const canRevealAll =
-              isDetective && isEligibleFine && selfRevealedByMe && !proposal.creator_revealed_to_all && !isOwnProposal
+              isDetective && isEligibleFine && selfRevealedByMe && !proposal.creator_revealed_to_all && !isOwnProposal && !isGhost
 
             return (
               <HistoryCard

@@ -517,6 +517,7 @@ create trigger on_proposal_ai_verdict_request
 create function public.lock_protected_profile_fields()
 returns trigger
 language plpgsql
+set search_path = public
 as $$
 begin
   if coalesce(current_setting('app.internal_update', true), 'false') = 'true' then

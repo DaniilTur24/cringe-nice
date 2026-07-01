@@ -4,9 +4,8 @@ import { supabase } from '../../lib/supabaseClient'
 import Card from '../Card'
 import Button from '../Button'
 import Toast from '../Toast'
-import { ROLE_REFERENCE, ROLES, SPECIAL_ROLES, rolePerks, roleReference } from '../../lib/roles'
+import { ROLE_REFERENCE, ROLES, rolePerks, roleReference } from '../../lib/roles'
 
-const ALL_BUTTONS = [...SPECIAL_ROLES, 'civilian']
 const WHEEL_COLORS = ['#ffd166', '#4de3c1', '#0055ff', '#ff365e', '#fff7e8', '#9b5de5']
 
 function todayISO() {
@@ -193,30 +192,6 @@ export default function RoleWheel({ tripId, userId, onDone }) {
           ))}
         </div>
       </Card>
-
-      <div className="rounded-[1.35rem] border-[3px] border-juicy-red bg-white p-5 shadow-neo-sm">
-        <span className="panel-label">Dev test panel</span>
-        <p className="mt-2 text-xs font-bold text-ink/55">
-          Принудительно назначает роль для теста в этой вкладке. Удалить перед релизом.
-        </p>
-        <div className="mt-4 grid grid-cols-2 gap-2">
-          {ALL_BUTTONS.map((role) => {
-            const isTaken = takenRoles.includes(role)
-            return (
-              <Button
-                key={role}
-                variant="secondary"
-                disabled={isTaken || phase === 'spinning'}
-                onClick={() => spin(role, true)}
-                className="text-xs"
-              >
-                {ROLES[role].label}
-                {isTaken ? ' (занято)' : ''}
-              </Button>
-            )
-          })}
-        </div>
-      </div>
     </div>
   )
 }
