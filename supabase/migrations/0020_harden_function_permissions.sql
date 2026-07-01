@@ -17,18 +17,19 @@ begin
 end;
 $$;
 
--- Revoke execute from the anon (public) role on every security-definer
--- function. Unauthenticated callers have no business calling any of these.
-revoke execute on function public.assign_trip_role(uuid, uuid, text, boolean)  from public;
-revoke execute on function public.close_proposal_if_complete()                  from public;
-revoke execute on function public.detective_reveal(uuid, text)                  from public;
-revoke execute on function public.get_vote_counts(uuid)                         from public;
-revoke execute on function public.handle_new_proposal()                         from public;
-revoke execute on function public.is_trip_member(uuid, uuid)                   from public;
-revoke execute on function public.lock_protected_profile_fields()               from public;
-revoke execute on function public.reject_pending_proposals_on_trip_close()      from public;
-revoke execute on function public.request_ai_verdict_generation()               from public;
-revoke execute on function public.validate_vote()                               from public;
+-- Revoke execute from unauthenticated callers on every security-definer
+-- function. Supabase grants execute to anon explicitly (not via the public
+-- pseudo-role), so we must revoke from both public and anon.
+revoke execute on function public.assign_trip_role(uuid, uuid, text, boolean)  from public, anon;
+revoke execute on function public.close_proposal_if_complete()                  from public, anon;
+revoke execute on function public.detective_reveal(uuid, text)                  from public, anon;
+revoke execute on function public.get_vote_counts(uuid)                         from public, anon;
+revoke execute on function public.handle_new_proposal()                         from public, anon;
+revoke execute on function public.is_trip_member(uuid, uuid)                   from public, anon;
+revoke execute on function public.lock_protected_profile_fields()               from public, anon;
+revoke execute on function public.reject_pending_proposals_on_trip_close()      from public, anon;
+revoke execute on function public.request_ai_verdict_generation()               from public, anon;
+revoke execute on function public.validate_vote()                               from public, anon;
 
 -- Trigger functions are invoked by the DB engine, never by users directly.
 -- Revoke execute from authenticated too so they can't be called as RPCs.
