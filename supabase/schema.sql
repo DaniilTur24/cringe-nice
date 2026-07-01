@@ -603,6 +603,11 @@ declare
   v_flush_amount       integer;
   v_stale_member       record;
 begin
+  -- Пользователь может назначать роль только себе.
+  if p_user_id <> auth.uid() then
+    raise exception 'Можно назначать роль только себе';
+  end if;
+
   perform pg_advisory_xact_lock(hashtext(p_trip_id::text));
 
   if not exists (
@@ -734,6 +739,8 @@ begin
 end;
 $$;
 
+-- anon is granted execute by Supabase on function creation; revoke it explicitly.
+revoke execute on function public.assign_trip_role(uuid, uuid, text, boolean) from public, anon;
 grant execute on function public.assign_trip_role(uuid, uuid, text, boolean) to authenticated;
 
 -- ----------------------------------------------------------------------------
@@ -831,6 +838,7 @@ begin
 end;
 $$;
 
+revoke execute on function public.detective_reveal(uuid, text) from public, anon;
 grant execute on function public.detective_reveal(uuid, text) to authenticated;
 
 -- ============================================================================
