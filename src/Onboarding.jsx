@@ -43,14 +43,10 @@ async function isTripMember(tripId, userId) {
 }
 
 async function fetchTripStatus(tripId) {
-  const { data, error } = await supabase
-    .from('trips')
-    .select('status')
-    .eq('id', tripId)
-    .maybeSingle()
+  const { data, error } = await supabase.rpc('get_trip_invite_status', { p_trip_id: tripId })
   if (error) throw error
   if (!data) throw new Error('Поездка по этой ссылке не найдена.')
-  return data.status
+  return data
 }
 
 async function fetchTripMemberAvatar(tripId, userId) {
@@ -205,10 +201,11 @@ export default function Onboarding() {
 
     async function init() {
       try {
-        const tripIdFromUrl = new URLSearchParams(window.location.search).get('trip_id')
-        // OAuth-редирект кладёт токены в хэш URL — по нему понимаем что это
-        // свежий логин, а не перезагрузка со старым JWT.
-        const isOAuthCallback = window.location.hash.includes('access_token')
+        const params = new URLSearchParams(window.location.search)
+        const tripIdFromUrl = params.get('trip_id')
+        // OAuth-редирект возвращает ?code=... в PKCE-flow или #access_token в
+        // старом implicit-flow; оба варианта означают свежий логин.
+        const isOAuthCallback = params.has('code') || window.location.hash.includes('access_token')
         // getUser() round-trips to the server, unlike getSession() which only
         // reads the cached token — that matters if auth.users was ever reset
         // (e.g. a schema reload) while a stale session sat in localStorage.
@@ -305,12 +302,14 @@ export default function Onboarding() {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) throw new Error('Сессия истекла, войди заново.')
 
+      if (await isTripMember(tripId, user.id)) {
+        await enterTrip(tripId, user.id)
+        return
+      }
+
       const { error: memberError } = await supabase
         .from('trip_members')
-        .upsert(
-          [{ trip_id: tripId, user_id: user.id, nickname: username, avatar_url: avatar }],
-          { onConflict: 'trip_id,user_id' }
-        )
+        .insert([{ trip_id: tripId, user_id: user.id, nickname: username, avatar_url: avatar }])
       if (memberError) throw memberError
 
       window.history.replaceState(null, '', `?trip_id=${tripId}`)
